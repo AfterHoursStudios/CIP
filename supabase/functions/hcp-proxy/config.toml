@@ -1,0 +1,2 @@
+# Disable JWT verification since we use HCP API key for auth
+verify_jwt = false

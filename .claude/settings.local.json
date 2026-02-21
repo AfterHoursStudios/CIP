@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.housecallpro.com)",
+      "Bash(npm start)",
+      "Bash(supabase functions deploy:*)",
+      "Bash(supabase link:*)",
+      "Bash(supabase functions logs:*)",
+      "WebFetch(domain:help.housecallpro.com)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "WebFetch(domain:rollout.com)",
+      "WebFetch(domain:apitracker.io)",
+      "Bash(git add:*)"
+    ]
+  }
+}

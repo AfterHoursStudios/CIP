@@ -1,0 +1,5 @@
+[functions.hcp-proxy]
+verify_jwt = false
+
+[functions.send-invitation-email]
+verify_jwt = true
