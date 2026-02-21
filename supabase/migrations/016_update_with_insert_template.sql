@@ -1,12 +1,6 @@
--- Add Level 1 Chimney Inspection template with measurement items
-INSERT INTO checklist_templates (id, name, description, industry, is_system, categories)
-VALUES (
-  'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-  'Level 1 Chimney Inspection (NO INSERT)',
-  'Basic chimney inspection with measurements for chimneys without stove/insert',
-  'Chimney',
-  true,
-  '[
+-- Update Level 1 Chimney Inspection (WITH INSERT) template with Flue/Liner rename
+UPDATE checklist_templates
+SET categories = '[
     {
       "name": "Chimney Dimensions",
       "items": [
@@ -65,6 +59,19 @@ VALUES (
       ]
     },
     {
+      "name": "Stove/Insert",
+      "items": [
+        {"name": "Insert/Stove Condition", "item_type": "status", "description": "Inspect insert or stove for cracks, warping, rust, damaged gaskets, or deteriorated components."},
+        {"name": "Door Seal/Gasket", "item_type": "status", "description": "Check door gasket for compression, gaps, fraying, or hardening that could affect seal."},
+        {"name": "Glass Panel", "item_type": "status", "description": "Inspect glass for cracks, chips, discoloration, or improper seating in frame."},
+        {"name": "Blower/Fan Operation", "item_type": "status", "description": "Verify blower or fan operates properly. Check for noise, vibration, or failure to start."},
+        {"name": "Air Controls", "item_type": "status", "description": "Test primary and secondary air controls for proper function and adjustment range."},
+        {"name": "Clearances to Combustibles", "item_type": "status", "description": "Verify proper clearances from insert/stove to surrounding combustible materials per manufacturer specs."},
+        {"name": "Liner Connection", "item_type": "status", "description": "Inspect connection between insert and liner for proper fit, seal, and secure attachment."},
+        {"name": "Surround/Facade", "item_type": "status", "description": "Check decorative surround or facade for damage, loose panels, or improper installation."}
+      ]
+    },
+    {
       "name": "Other Safety Considerations",
       "items": [
         {"name": "Smoke Detector", "item_type": "status", "description": "Visually verify presence and location of smoke detectors in required areas. Confirm unit appears operational and recommend testing per manufacturer guidelines. Note missing, expired, or improperly located units."},
@@ -72,10 +79,6 @@ VALUES (
         {"name": "Fire Extinguisher", "item_type": "status", "description": "Confirm presence of accessible fire extinguisher in fireplace area. Check gauge for proper charge, inspect for damage or expired service date."}
       ]
     }
-  ]'::jsonb
-)
-ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
-  description = EXCLUDED.description,
-  categories = EXCLUDED.categories,
-  updated_at = NOW();
+  ]'::jsonb,
+  updated_at = NOW()
+WHERE id = 'a1b2c3d4-58cc-4372-a567-0e02b2c3d480';

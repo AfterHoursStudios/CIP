@@ -1,9 +1,9 @@
--- Add Level 1 Chimney Inspection template with measurement items
+-- Add Level 1 Chimney Inspection (WITH INSERT) template
 INSERT INTO checklist_templates (id, name, description, industry, is_system, categories)
 VALUES (
-  'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-  'Level 1 Chimney Inspection (NO INSERT)',
-  'Basic chimney inspection with measurements for chimneys without stove/insert',
+  '2c074bca-66cf-4150-b536-74c1264bcdbe',
+  'Level 2 Chimney Inspection (WITH INSERT)',
+  'Advanced chimney inspection with measurements for chimneys with stove/insert',
   'Chimney',
   true,
   '[
@@ -62,6 +62,32 @@ VALUES (
         {"name": "Ash Container", "item_type": "status", "description": "Check ash dump and container for proper function, corrosion, blockage, or missing cover."},
         {"name": "Spark Screen/Doors", "item_type": "status", "description": "Inspect glass doors or spark screen for proper operation, damaged panels, or loose hardware."},
         {"name": "Hearth", "item_type": "status", "description": "Verify hearth extension is intact, properly supported, and meets clearance requirements."}
+      ]
+    },
+    {
+      "name": "Stove/Insert",
+      "items": [
+        {"name": "Insert/Stove Condition", "item_type": "status", "description": "Inspect insert or stove for cracks, warping, rust, damaged gaskets, or deteriorated components."},
+        {"name": "Door Seal/Gasket", "item_type": "status", "description": "Check door gasket for compression, gaps, fraying, or hardening that could affect seal."},
+        {"name": "Glass Panel", "item_type": "status", "description": "Inspect glass for cracks, chips, discoloration, or improper seating in frame."},
+        {"name": "Blower/Fan Operation", "item_type": "status", "description": "Verify blower or fan operates properly. Check for noise, vibration, or failure to start."},
+        {"name": "Air Controls", "item_type": "status", "description": "Test primary and secondary air controls for proper function and adjustment range."},
+        {"name": "Clearances to Combustibles", "item_type": "status", "description": "Verify proper clearances from insert/stove to surrounding combustible materials per manufacturer specs."},
+        {"name": "Liner Connection", "item_type": "status", "description": "Inspect connection between insert and liner for proper fit, seal, and secure attachment."},
+        {"name": "Surround/Facade", "item_type": "status", "description": "Check decorative surround or facade for damage, loose panels, or improper installation."}
+      ]
+    },
+    {
+      "name": "Crawlspace/Attic Inspection",
+      "items": [
+        {"name": "Structural Integrity", "item_type": "status", "description": "Inspect exposed chimney sections for cracking, separation, leaning, damaged masonry, or unsupported offsets in attic or crawlspace."},
+        {"name": "Moisture Intrusion", "item_type": "status", "description": "Check for signs of moisture intrusion such as staining, efflorescence, mold, or rot on chimney structure in attic or crawlspace."},
+        {"name": "Pest Infestation", "item_type": "status", "description": "Look for evidence of pest infestation such as droppings, nesting materials, or damage from rodents or insects in chimney areas of attic or crawlspace."},
+        {"name": "Insulation Clearance", "item_type": "status", "description": "Verify proper clearance between chimney and combustible insulation materials in attic or crawlspace per code requirements."},
+        {"name": "Evidence of Overheating", "item_type": "status", "description": "Check for charred framing, darkened wood, cracked masonry, or other signs of excessive heat exposure."},
+        {"name": "Smoke or Creosote Leakage", "item_type": "status", "description": "Inspect concealed areas for smoke staining, creosote deposits, or leakage at chimney joints or chase walls."},
+        {"name": "Water Intrusion", "item_type": "status", "description": "Check for water staining, mold growth, efflorescence, rusted components, or roof deck deterioration near chimney penetration."},
+        {"name": "Chimney Support and Bracing", "item_type": "status", "description": "Verify chimney is properly supported and braced per manufacturer requirements or masonry standards. Look for missing or deteriorated support straps, braces, or anchors in attic or crawlspace."}
       ]
     },
     {

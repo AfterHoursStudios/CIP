@@ -93,6 +93,14 @@ export default function InspectionDetailScreen() {
       // Sort items within each category by sort_order
       grouped.forEach((g) => g.items.sort((a, b) => a.sort_order - b.sort_order));
 
+      // Sort categories by the minimum sort_order of their items
+      // This preserves the order from the template
+      grouped.sort((a, b) => {
+        const aMinOrder = Math.min(...a.items.map(item => item.sort_order));
+        const bMinOrder = Math.min(...b.items.map(item => item.sort_order));
+        return aMinOrder - bMinOrder;
+      });
+
       setCategories(grouped);
     }
   }, [id]);

@@ -1,9 +1,9 @@
--- Add Level 1 Chimney Inspection template with measurement items
+-- Add Level 1 Chimney Inspection (WITH INSERT) template
 INSERT INTO checklist_templates (id, name, description, industry, is_system, categories)
 VALUES (
-  'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-  'Level 1 Chimney Inspection (NO INSERT)',
-  'Basic chimney inspection with measurements for chimneys without stove/insert',
+  'eb0e950c-b247-47ca-8570-77dc019a7be0',
+  'Level 2 Chimney Inspection (NO INSERT)',
+  'Advanced chimney inspection with measurements for chimneys without stove/insert',
   'Chimney',
   true,
   '[
@@ -62,6 +62,19 @@ VALUES (
         {"name": "Ash Container", "item_type": "status", "description": "Check ash dump and container for proper function, corrosion, blockage, or missing cover."},
         {"name": "Spark Screen/Doors", "item_type": "status", "description": "Inspect glass doors or spark screen for proper operation, damaged panels, or loose hardware."},
         {"name": "Hearth", "item_type": "status", "description": "Verify hearth extension is intact, properly supported, and meets clearance requirements."}
+      ]
+    },
+    {
+      "name": "Crawlspace/Attic Inspection",
+      "items": [
+        {"name": "Structural Integrity", "item_type": "status", "description": "Inspect exposed chimney sections for cracking, separation, leaning, damaged masonry, or unsupported offsets in attic or crawlspace."},
+        {"name": "Moisture Intrusion", "item_type": "status", "description": "Check for signs of moisture intrusion such as staining, efflorescence, mold, or rot on chimney structure in attic or crawlspace."},
+        {"name": "Pest Infestation", "item_type": "status", "description": "Look for evidence of pest infestation such as droppings, nesting materials, or damage from rodents or insects in chimney areas of attic or crawlspace."},
+        {"name": "Insulation Clearance", "item_type": "status", "description": "Verify proper clearance between chimney and combustible insulation materials in attic or crawlspace per code requirements."},
+        {"name": "Evidence of Overheating", "item_type": "status", "description": "Check for charred framing, darkened wood, cracked masonry, or other signs of excessive heat exposure."},
+        {"name": "Smoke or Creosote Leakage", "item_type": "status", "description": "Inspect concealed areas for smoke staining, creosote deposits, or leakage at chimney joints or chase walls."},
+        {"name": "Water Intrusion", "item_type": "status", "description": "Check for water staining, mold growth, efflorescence, rusted components, or roof deck deterioration near chimney penetration."},
+        {"name": "Chimney Support and Bracing", "item_type": "status", "description": "Verify chimney is properly supported and braced per manufacturer requirements or masonry standards. Look for missing or deteriorated support straps, braces, or anchors in attic or crawlspace."}
       ]
     },
     {
