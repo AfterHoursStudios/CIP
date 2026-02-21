@@ -164,17 +164,16 @@ export async function getCurrentUser(): Promise<ApiResponse<User>> {
     userProfile = profile;
   }
 
-  // Process any pending invitations on every login
-  try {
-    console.log('Processing pending invitations for:', authUser.email);
-    const { data: inviteCount, error: inviteError } = await supabase.rpc('process_pending_invitations', {
-      p_user_id: authUser.id,
-      p_email: authUser.email,
-    });
-    console.log('Invitations processed:', inviteCount, 'Error:', inviteError);
-  } catch (e) {
-    console.log('Error processing invitations:', e);
-  }
+  // Process any pending invitations on every login (non-blocking)
+  supabase.rpc('process_pending_invitations', {
+    p_user_id: authUser.id,
+    p_email: authUser.email,
+  }).then(({ data, error }) => {
+    if (error) console.log('Invitation processing error:', error.message);
+    else console.log('Invitations processed:', data);
+  }).catch(() => {
+    // Silently ignore - RPC might not exist
+  });
 
   return { data: userProfile, error: null };
 }
