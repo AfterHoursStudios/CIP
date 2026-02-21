@@ -18,6 +18,7 @@ import { Card, Button, Input } from '../../src/components/ui';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import * as hcpService from '../../src/services/housecallpro.service';
 import * as companyService from '../../src/services/company.service';
+import { supabase } from '../../src/lib/supabase';
 
 export default function ProfileScreen() {
   const { user, signOut } = useAuth();
@@ -27,6 +28,10 @@ export default function ProfileScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [isHcpConnected, setIsHcpConnected] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -112,6 +117,58 @@ export default function ProfileScreen() {
     }
 
     setIsUploadingLogo(false);
+  }
+
+  async function handleChangePassword() {
+    if (!newPassword || !confirmPassword) {
+      if (Platform.OS === 'web') {
+        alert('Please fill in both password fields');
+      } else {
+        Alert.alert('Error', 'Please fill in both password fields');
+      }
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      if (Platform.OS === 'web') {
+        alert('Passwords do not match');
+      } else {
+        Alert.alert('Error', 'Passwords do not match');
+      }
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      if (Platform.OS === 'web') {
+        alert('Password must be at least 6 characters');
+      } else {
+        Alert.alert('Error', 'Password must be at least 6 characters');
+      }
+      return;
+    }
+
+    setIsChangingPassword(true);
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+    setIsChangingPassword(false);
+
+    if (error) {
+      if (Platform.OS === 'web') {
+        alert('Error changing password: ' + error.message);
+      } else {
+        Alert.alert('Error', error.message);
+      }
+    } else {
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowChangePassword(false);
+      if (Platform.OS === 'web') {
+        alert('Password changed successfully!');
+      } else {
+        Alert.alert('Success', 'Password changed successfully!');
+      }
+    }
   }
 
   async function handleRemoveLogo() {
@@ -317,6 +374,56 @@ export default function ProfileScreen() {
       {/* Settings */}
       <Card style={styles.card}>
         <Text style={styles.sectionTitle}>Settings</Text>
+
+        <TouchableOpacity
+          style={styles.settingRow}
+          onPress={() => setShowChangePassword(!showChangePassword)}
+        >
+          <Ionicons name="lock-closed-outline" size={24} color={COLORS.gray600} />
+          <Text style={styles.settingText}>Change Password</Text>
+          <Ionicons
+            name={showChangePassword ? 'chevron-down' : 'chevron-forward'}
+            size={20}
+            color={COLORS.gray400}
+          />
+        </TouchableOpacity>
+
+        {showChangePassword && (
+          <View style={styles.passwordForm}>
+            <Input
+              label="New Password"
+              value={newPassword}
+              onChangeText={setNewPassword}
+              placeholder="Enter new password"
+              secureTextEntry
+            />
+            <Input
+              label="Confirm Password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder="Confirm new password"
+              secureTextEntry
+            />
+            <View style={styles.passwordButtons}>
+              <Button
+                title="Cancel"
+                onPress={() => {
+                  setShowChangePassword(false);
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+                variant="ghost"
+                size="sm"
+              />
+              <Button
+                title="Update Password"
+                onPress={handleChangePassword}
+                loading={isChangingPassword}
+                size="sm"
+              />
+            </View>
+          </View>
+        )}
 
         <TouchableOpacity style={styles.settingRow}>
           <Ionicons name="notifications-outline" size={24} color={COLORS.gray600} />
@@ -548,5 +655,18 @@ const styles = StyleSheet.create({
   },
   logoButtonTextDanger: {
     color: COLORS.error,
+  },
+  passwordForm: {
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+    backgroundColor: COLORS.gray50,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.sm,
+  },
+  passwordButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: SPACING.sm,
+    marginTop: SPACING.sm,
   },
 });

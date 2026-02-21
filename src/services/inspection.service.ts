@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '../lib/supabase';
 import type {
   Inspection,
@@ -318,6 +320,16 @@ export async function deleteItemPhoto(photoId: string): Promise<ApiResponse<null
   return { data: null, error: null };
 }
 
+// Helper function to decode base64 to Uint8Array (works in React Native)
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export async function uploadPhoto(
   companyId: string,
   inspectionId: string,
@@ -326,16 +338,37 @@ export async function uploadPhoto(
   try {
     const fileName = `${companyId}/${inspectionId}/${Date.now()}.jpg`;
 
-    // Fetch the image
-    const response = await fetch(uri);
-    const blob = await response.blob();
+    let uploadData: Blob | Uint8Array;
+
+    if (Platform.OS === 'web') {
+      // Web: Use fetch to get blob
+      const response = await fetch(uri);
+      uploadData = await response.blob();
+    } else {
+      // Mobile: Use FileSystem to read as base64, then convert to Uint8Array
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+
+      if (!fileInfo.exists) {
+        return { data: null, error: 'Photo file not found at: ' + uri.substring(0, 50) };
+      }
+
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: 'base64',
+      });
+
+      // Convert base64 to Uint8Array
+      uploadData = base64ToUint8Array(base64);
+    }
 
     const { error } = await supabase.storage
       .from('inspection-photos')
-      .upload(fileName, blob, { contentType: 'image/jpeg' });
+      .upload(fileName, uploadData, {
+        contentType: 'image/jpeg',
+        upsert: false
+      });
 
     if (error) {
-      return { data: null, error: error.message };
+      return { data: null, error: 'Storage upload failed: ' + error.message };
     }
 
     const { data: urlData } = supabase.storage
@@ -344,6 +377,6 @@ export async function uploadPhoto(
 
     return { data: urlData.publicUrl, error: null };
   } catch (error) {
-    return { data: null, error: (error as Error).message };
+    return { data: null, error: 'Upload exception: ' + (error as Error).message };
   }
 }

@@ -8,6 +8,7 @@ import {
   ScrollView,
   Alert,
   TouchableOpacity,
+  Image,
 } from 'react-native';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -90,8 +91,11 @@ export default function RegisterScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Construction</Text>
-          <Text style={styles.subtitle}>Inspection Pro</Text>
+          <Image
+            source={require('../../assets/cip-logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
         </View>
 
         <Card style={styles.card}>
@@ -192,16 +196,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.xl,
   },
-  title: {
-    fontSize: FONT_SIZE.xxxl,
-    fontWeight: FONT_WEIGHT.bold,
-    color: COLORS.white,
-  },
-  subtitle: {
-    fontSize: FONT_SIZE.xl,
-    fontWeight: FONT_WEIGHT.medium,
-    color: COLORS.white,
-    opacity: 0.9,
+  logo: {
+    width: 200,
+    height: 100,
   },
   card: {
     padding: SPACING.lg,

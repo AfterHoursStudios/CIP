@@ -472,59 +472,57 @@ export default function InspectionDetailScreen() {
   }
 
   async function handleTakePhoto(itemId: string) {
-    if (!inspection || !currentCompany) return;
+    if (!inspection || !currentCompany) {
+      Alert.alert('Debug', 'No inspection or company found');
+      return;
+    }
 
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      if (Platform.OS === 'web') {
-        alert('Camera permission is required to take photos');
-      } else {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
         Alert.alert('Permission Required', 'Camera permission is required to take photos');
+        return;
       }
-      return;
-    }
 
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      quality: 0.8,
-    });
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        quality: 0.8,
+      });
 
-    if (result.canceled || !result.assets[0]) return;
+      if (result.canceled || !result.assets[0]) {
+        return;
+      }
 
-    setUploadingPhotoItemId(itemId);
+      setUploadingPhotoItemId(itemId);
 
-    // Upload photo to storage
-    const { data: photoUrl, error: uploadError } = await inspectionService.uploadPhoto(
-      currentCompany.id,
-      inspection.id,
-      result.assets[0].uri
-    );
+      // Upload photo to storage
+      const { data: photoUrl, error: uploadError } = await inspectionService.uploadPhoto(
+        currentCompany.id,
+        inspection.id,
+        result.assets[0].uri
+      );
 
-    if (uploadError || !photoUrl) {
-      if (Platform.OS === 'web') {
-        alert('Error uploading photo: ' + (uploadError || 'Unknown error'));
+      if (uploadError || !photoUrl) {
+        Alert.alert('Upload Error', uploadError || 'Failed to upload photo');
+        setUploadingPhotoItemId(null);
+        return;
+      }
+
+      // Add photo record to database
+      const { error: addError } = await inspectionService.addItemPhoto(itemId, photoUrl);
+
+      if (addError) {
+        Alert.alert('Database Error', addError);
       } else {
-        Alert.alert('Error', uploadError || 'Failed to upload photo');
+        // Reload to get updated photos
+        await loadInspection();
       }
+
       setUploadingPhotoItemId(null);
-      return;
+    } catch (err) {
+      Alert.alert('Error', 'Photo capture failed: ' + (err as Error).message);
+      setUploadingPhotoItemId(null);
     }
-
-    // Add photo record to database
-    const { error: addError } = await inspectionService.addItemPhoto(itemId, photoUrl);
-
-    if (addError) {
-      if (Platform.OS === 'web') {
-        alert('Error saving photo: ' + addError);
-      } else {
-        Alert.alert('Error', addError);
-      }
-    } else {
-      // Reload to get updated photos
-      await loadInspection();
-    }
-
-    setUploadingPhotoItemId(null);
   }
 
   async function handleDeletePhoto(photoId: string) {
@@ -694,9 +692,9 @@ export default function InspectionDetailScreen() {
                             index < cat.items.length - 1 && styles.itemWrapperBorder,
                           ]}
                         >
-                          <View style={styles.itemRow}>
-                            {item.item_type === 'measurement' ? (
-                              /* Measurement Input */
+                          {item.item_type === 'measurement' ? (
+                            /* Measurement Input */
+                            <View style={styles.itemRow}>
                               <MeasurementInput
                                 label={item.name}
                                 description={item.description}
@@ -704,51 +702,51 @@ export default function InspectionDetailScreen() {
                                 onChange={(value) => handleMeasurementChange(item, value)}
                                 disabled={updatingItemId === item.id}
                               />
-                            ) : (
-                              /* Status Options */
-                              <>
-                                <View style={styles.itemNameContainer}>
-                                  <Text style={styles.itemName}>{item.name}</Text>
-                                  {item.description && (
-                                    <Text style={styles.itemDescription}>{item.description}</Text>
-                                  )}
-                                </View>
-                                <View style={styles.statusOptions}>
-                                  {STATUS_OPTIONS.map((option) => {
-                                    const isSelected = item.status === option.value;
-                                    const isUpdating = updatingItemId === item.id;
-                                    return (
-                                      <TouchableOpacity
-                                        key={option.value}
-                                        style={[
-                                          styles.statusButton,
-                                          isSelected && {
-                                            backgroundColor: option.bgColor,
-                                            borderColor: option.color,
-                                          },
-                                        ]}
-                                        onPress={() => handleStatusChange(item, option.value)}
-                                        disabled={isUpdating}
-                                      >
-                                        {isUpdating && isSelected ? (
-                                          <ActivityIndicator size="small" color={option.color} />
-                                        ) : (
-                                          <Text
-                                            style={[
-                                              styles.statusButtonText,
-                                              isSelected && { color: option.color },
-                                            ]}
-                                          >
-                                            {option.label}
-                                          </Text>
-                                        )}
-                                      </TouchableOpacity>
-                                    );
-                                  })}
-                                </View>
-                              </>
-                            )}
-                          </View>
+                            </View>
+                          ) : (
+                            /* Status Options - Stacked Layout */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <View style={styles.statusOptions}>
+                                {STATUS_OPTIONS.map((option) => {
+                                  const isSelected = item.status === option.value;
+                                  const isUpdating = updatingItemId === item.id;
+                                  return (
+                                    <TouchableOpacity
+                                      key={option.value}
+                                      style={[
+                                        styles.statusButton,
+                                        isSelected && {
+                                          backgroundColor: option.bgColor,
+                                          borderColor: option.color,
+                                        },
+                                      ]}
+                                      onPress={() => handleStatusChange(item, option.value)}
+                                      disabled={isUpdating}
+                                    >
+                                      {isUpdating && isSelected ? (
+                                        <ActivityIndicator size="small" color={option.color} />
+                                      ) : (
+                                        <Text
+                                          style={[
+                                            styles.statusButtonText,
+                                            isSelected && { color: option.color },
+                                          ]}
+                                        >
+                                          {option.label}
+                                        </Text>
+                                      )}
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </View>
+                            </View>
+                          )}
 
                           {/* Photo Section */}
                           <View style={styles.photoSection}>
@@ -1090,31 +1088,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  itemColumn: {
+    flexDirection: 'column',
+  },
   itemNameContainer: {
-    flex: 1,
-    marginRight: SPACING.sm,
+    marginBottom: SPACING.sm,
   },
   itemName: {
-    fontSize: FONT_SIZE.sm,
+    fontSize: FONT_SIZE.md,
+    fontWeight: FONT_WEIGHT.medium,
     color: COLORS.textPrimary,
   },
   itemDescription: {
-    fontSize: FONT_SIZE.xs,
+    fontSize: FONT_SIZE.sm,
     color: COLORS.textSecondary,
-    marginTop: 2,
+    marginTop: 4,
   },
   statusOptions: {
     flexDirection: 'row',
-    gap: 4,
+    flexWrap: 'wrap',
+    gap: 6,
   },
   statusButton: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 6,
-    borderRadius: RADIUS.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.gray300,
     backgroundColor: COLORS.white,
-    minWidth: 50,
+    minWidth: 70,
     alignItems: 'center',
   },
   statusButtonText: {

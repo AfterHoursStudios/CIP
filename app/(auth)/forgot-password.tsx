@@ -7,6 +7,7 @@ import {
   Platform,
   ScrollView,
   Alert,
+  Image,
 } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useAuth } from '../../src/contexts';
@@ -35,13 +36,22 @@ export default function ForgotPasswordScreen() {
     setIsLoading(false);
 
     if (resetError) {
-      Alert.alert('Error', resetError);
+      if (Platform.OS === 'web') {
+        alert('Error: ' + resetError);
+      } else {
+        Alert.alert('Error', resetError);
+      }
     } else {
-      Alert.alert(
-        'Check Your Email',
-        'If an account exists with this email, you will receive password reset instructions.',
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      if (Platform.OS === 'web') {
+        alert('Check your email! If an account exists, you will receive password reset instructions.');
+        router.replace('/(auth)/login');
+      } else {
+        Alert.alert(
+          'Check Your Email',
+          'If an account exists with this email, you will receive password reset instructions.',
+          [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
+        );
+      }
     }
   }
 
@@ -55,8 +65,11 @@ export default function ForgotPasswordScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Construction</Text>
-          <Text style={styles.subtitle}>Inspection Pro</Text>
+          <Image
+            source={require('../../assets/cip-logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
         </View>
 
         <Card style={styles.card}>
@@ -110,16 +123,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.xl,
   },
-  title: {
-    fontSize: FONT_SIZE.xxxl,
-    fontWeight: FONT_WEIGHT.bold,
-    color: COLORS.white,
-  },
-  subtitle: {
-    fontSize: FONT_SIZE.xl,
-    fontWeight: FONT_WEIGHT.medium,
-    color: COLORS.white,
-    opacity: 0.9,
+  logo: {
+    width: 200,
+    height: 100,
   },
   card: {
     padding: SPACING.lg,

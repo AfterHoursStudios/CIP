@@ -12,44 +12,46 @@ export async function signUp(
   password: string,
   fullName: string
 ): Promise<ApiResponse<User>> {
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { full_name: fullName },
-    },
-  });
+  try {
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName },
+      },
+    });
 
-  if (authError) {
-    return { data: null, error: authError.message };
-  }
+    if (authError) {
+      return { data: null, error: authError.message };
+    }
 
-  if (!authData.user) {
-    return { data: null, error: 'Failed to create user' };
-  }
+    if (!authData.user) {
+      return { data: null, error: 'Failed to create user' };
+    }
 
-  // Create user profile
-  const { error: profileError } = await supabase.from('users').insert({
-    id: authData.user.id,
-    email: authData.user.email,
-    full_name: fullName,
-  });
-
-  if (profileError) {
-    console.error('Profile creation error:', profileError);
-  }
-
-  return {
-    data: {
+    // Create user profile (ignore errors - might already exist or RLS issues)
+    await supabase.from('users').insert({
       id: authData.user.id,
-      email: authData.user.email!,
+      email: authData.user.email,
       full_name: fullName,
-      avatar_url: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-    error: null,
-  };
+    }).then(({ error }) => {
+      if (error) console.log('Profile creation note:', error.message);
+    });
+
+    return {
+      data: {
+        id: authData.user.id,
+        email: authData.user.email || email,
+        full_name: fullName,
+        avatar_url: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      error: null,
+    };
+  } catch (error) {
+    return { data: null, error: (error as Error).message };
+  }
 }
 
 export async function signIn(
@@ -102,8 +104,13 @@ export async function signOut(): Promise<ApiResponse<null>> {
 }
 
 export async function resetPassword(email: string): Promise<ApiResponse<null>> {
+  const redirectUrl = makeRedirectUri({
+    scheme: 'inspectionpro',
+    path: 'auth/reset-password',
+  });
+
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: 'inspectionpro://reset-password',
+    redirectTo: redirectUrl,
   });
 
   if (error) {
