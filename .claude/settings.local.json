@@ -16,7 +16,13 @@
       "Bash(git commit:*)",
       "Bash(git config:*)",
       "Bash(npx eas:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(ls:*)",
+      "Bash(npx expo start:*)",
+      "Bash(git diff:*)",
+      "Bash(git push:*)",
+      "Bash(timeout 90 tail:*)",
+      "Bash(npx supabase db push:*)"
     ]
   }
 }
