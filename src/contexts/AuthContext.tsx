@@ -41,24 +41,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function checkUser() {
+    console.log('Checking user authentication...');
+
+    // Add timeout to prevent infinite loading
+    const timeout = setTimeout(() => {
+      console.log('Auth check timed out, proceeding without user');
+      setUser(null);
+      setIsLoading(false);
+    }, 5000);
+
     try {
-      console.log('Checking user authentication...');
-
-      // Add timeout to prevent infinite loading
-      const timeoutPromise = new Promise<null>((_, reject) =>
-        setTimeout(() => reject(new Error('Auth check timeout')), 10000)
-      );
-
-      const authPromise = authService.getCurrentUser();
-
-      const { data } = await Promise.race([authPromise, timeoutPromise.then(() => ({ data: null, error: 'timeout' }))]) as any;
-
+      const { data } = await authService.getCurrentUser();
+      clearTimeout(timeout);
       console.log('Auth check complete, user:', data ? 'found' : 'not found');
       setUser(data);
     } catch (error) {
+      clearTimeout(timeout);
       console.log('Auth check error:', error);
       setUser(null);
     } finally {
+      clearTimeout(timeout);
       setIsLoading(false);
     }
   }

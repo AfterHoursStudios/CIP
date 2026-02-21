@@ -113,11 +113,16 @@ export async function resetPassword(email: string): Promise<ApiResponse<null>> {
 }
 
 export async function getCurrentUser(): Promise<ApiResponse<User>> {
-  const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+  console.log('getCurrentUser: starting...');
 
-  if (authError || !authUser) {
-    return { data: null, error: authError?.message || 'Not authenticated' };
-  }
+  try {
+    console.log('getCurrentUser: calling supabase.auth.getUser()...');
+    const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+    console.log('getCurrentUser: getUser complete', { hasUser: !!authUser, error: authError?.message });
+
+    if (authError || !authUser) {
+      return { data: null, error: authError?.message || 'Not authenticated' };
+    }
 
   let userProfile: User;
 
@@ -171,11 +176,13 @@ export async function getCurrentUser(): Promise<ApiResponse<User>> {
   }).then(({ data, error }) => {
     if (error) console.log('Invitation processing error:', error.message);
     else console.log('Invitations processed:', data);
-  }).catch(() => {
-    // Silently ignore - RPC might not exist
   });
 
-  return { data: userProfile, error: null };
+    return { data: userProfile, error: null };
+  } catch (error) {
+    console.log('getCurrentUser: unexpected error', error);
+    return { data: null, error: (error as Error).message };
+  }
 }
 
 export async function updateProfile(
