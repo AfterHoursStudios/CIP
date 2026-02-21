@@ -230,8 +230,16 @@ export async function signInWithGoogle(): Promise<ApiResponse<User>> {
 
       if (result.type === 'success') {
         const url = new URL(result.url);
-        const accessToken = url.searchParams.get('access_token');
-        const refreshToken = url.searchParams.get('refresh_token');
+
+        // Supabase returns tokens in the URL fragment (hash), not query params
+        // Parse the hash fragment to get the tokens
+        const hashParams = new URLSearchParams(url.hash.substring(1));
+        const accessToken = hashParams.get('access_token') || url.searchParams.get('access_token');
+        const refreshToken = hashParams.get('refresh_token') || url.searchParams.get('refresh_token');
+
+        console.log('OAuth callback URL:', result.url);
+        console.log('Access token found:', !!accessToken);
+        console.log('Refresh token found:', !!refreshToken);
 
         if (accessToken && refreshToken) {
           const { data: sessionData, error: sessionError } =
@@ -250,7 +258,7 @@ export async function signInWithGoogle(): Promise<ApiResponse<User>> {
         }
       }
 
-      return { data: null, error: 'Authentication cancelled' };
+      return { data: null, error: 'Authentication cancelled or no tokens received' };
     }
 
     return { data: null, error: 'Failed to initiate OAuth' };
@@ -290,8 +298,11 @@ export async function signInWithApple(): Promise<ApiResponse<User>> {
 
       if (result.type === 'success') {
         const url = new URL(result.url);
-        const accessToken = url.searchParams.get('access_token');
-        const refreshToken = url.searchParams.get('refresh_token');
+
+        // Supabase returns tokens in the URL fragment (hash), not query params
+        const hashParams = new URLSearchParams(url.hash.substring(1));
+        const accessToken = hashParams.get('access_token') || url.searchParams.get('access_token');
+        const refreshToken = hashParams.get('refresh_token') || url.searchParams.get('refresh_token');
 
         if (accessToken && refreshToken) {
           const { data: sessionData, error: sessionError } =
@@ -309,7 +320,7 @@ export async function signInWithApple(): Promise<ApiResponse<User>> {
         }
       }
 
-      return { data: null, error: 'Authentication cancelled' };
+      return { data: null, error: 'Authentication cancelled or no tokens received' };
     }
 
     return { data: null, error: 'Failed to initiate OAuth' };
