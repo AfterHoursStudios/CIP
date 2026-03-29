@@ -15,6 +15,7 @@ import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/c
 import { Card, Button, Input } from '../../src/components/ui';
 import { useCompany, useAuth } from '../../src/contexts';
 import * as hcpService from '../../src/services/housecallpro.service';
+import * as inspectionService from '../../src/services/inspection.service';
 
 export default function IntegrationsScreen() {
   const { user } = useAuth();
@@ -74,18 +75,34 @@ export default function IntegrationsScreen() {
     if (!currentCompany) return;
 
     const doDisconnect = async () => {
+      // Delete all HCP-imported inspections
+      const { data, error } = await inspectionService.deleteHcpInspections(currentCompany.id);
+
+      if (error) {
+        showAlert('Error', 'Failed to remove HCP jobs: ' + error);
+        return;
+      }
+
+      // Remove the API key
       await hcpService.removeApiKey(currentCompany.id);
       setIsConnected(false);
+
+      const jobCount = data?.count || 0;
+      if (jobCount > 0) {
+        showAlert('Disconnected', `Removed ${jobCount} job${jobCount === 1 ? '' : 's'} imported from Housecall Pro.`);
+      }
     };
 
+    const message = 'Are you sure you want to disconnect from Housecall Pro? This will remove all jobs imported from HCP and affect all team members.';
+
     if (Platform.OS === 'web') {
-      if (confirm('Are you sure you want to disconnect from Housecall Pro? This will affect all team members.')) {
+      if (confirm(message)) {
         doDisconnect();
       }
     } else {
       Alert.alert(
         'Disconnect',
-        'Are you sure you want to disconnect from Housecall Pro? This will affect all team members.',
+        message,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Disconnect', style: 'destructive', onPress: doDisconnect },

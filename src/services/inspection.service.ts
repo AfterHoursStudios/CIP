@@ -42,21 +42,54 @@ export async function createInspection(
   return { data: inspection, error: null };
 }
 
-// Check if HCP job already imported
+// Check if HCP job already imported - tries hcp_job_id first, then hcp_job_number as fallback
+// Must filter by company_id to avoid cross-company matches
 export async function getInspectionByHcpJobId(
-  hcpJobId: string
+  hcpJobId: string,
+  hcpJobNumber?: string,
+  companyId?: string
 ): Promise<ApiResponse<Inspection | null>> {
-  const { data, error } = await supabase
+  // First try to find by hcp_job_id (within company if specified)
+  let idQuery = supabase
     .from('inspections')
     .select('*')
-    .eq('hcp_job_id', hcpJobId)
-    .maybeSingle();
+    .eq('hcp_job_id', hcpJobId);
 
-  if (error) {
-    return { data: null, error: error.message };
+  if (companyId) {
+    idQuery = idQuery.eq('company_id', companyId);
   }
 
-  return { data, error: null };
+  const { data: byId, error: idError } = await idQuery.maybeSingle();
+
+  if (idError) {
+    return { data: null, error: idError.message };
+  }
+
+  if (byId) {
+    return { data: byId, error: null };
+  }
+
+  // If not found and we have a job number, try to find by hcp_job_number
+  if (hcpJobNumber) {
+    let numberQuery = supabase
+      .from('inspections')
+      .select('*')
+      .eq('hcp_job_number', hcpJobNumber);
+
+    if (companyId) {
+      numberQuery = numberQuery.eq('company_id', companyId);
+    }
+
+    const { data: byNumber, error: numberError } = await numberQuery.maybeSingle();
+
+    if (numberError) {
+      return { data: null, error: numberError.message };
+    }
+
+    return { data: byNumber, error: null };
+  }
+
+  return { data: null, error: null };
 }
 
 // Update HCP sync status
@@ -174,6 +207,39 @@ export async function deleteInspection(inspectionId: string): Promise<ApiRespons
   return { data: null, error: null };
 }
 
+// Delete all HCP-imported inspections for a company (used when disconnecting integration)
+export async function deleteHcpInspections(companyId: string): Promise<ApiResponse<{ count: number }>> {
+  // First get count of inspections to be deleted
+  const { data: inspections, error: fetchError } = await supabase
+    .from('inspections')
+    .select('id')
+    .eq('company_id', companyId)
+    .not('hcp_job_id', 'is', null);
+
+  if (fetchError) {
+    return { data: null, error: fetchError.message };
+  }
+
+  const count = inspections?.length || 0;
+
+  if (count === 0) {
+    return { data: { count: 0 }, error: null };
+  }
+
+  // Delete all HCP-linked inspections
+  const { error: deleteError } = await supabase
+    .from('inspections')
+    .delete()
+    .eq('company_id', companyId)
+    .not('hcp_job_id', 'is', null);
+
+  if (deleteError) {
+    return { data: null, error: deleteError.message };
+  }
+
+  return { data: { count }, error: null };
+}
+
 // Inspection Items
 export async function addInspectionItem(
   inspectionId: string,
@@ -261,9 +327,27 @@ export async function updateItemMeasurement(
   });
 }
 
+export async function updateItemValue(
+  itemId: string,
+  value: number | boolean | string | null
+): Promise<ApiResponse<InspectionItem>> {
+  // When a value is set, mark status as satisfactory (completed)
+  return updateInspectionItem(itemId, {
+    value: value as any,
+    status: 'satisfactory'
+  });
+}
+
+export async function updateItemNotes(
+  itemId: string,
+  notes: string | null
+): Promise<ApiResponse<InspectionItem>> {
+  return updateInspectionItem(itemId, { notes });
+}
+
 export async function bulkAddInspectionItems(
   inspectionId: string,
-  items: { category: string; name: string; item_type?: string; description?: string }[]
+  items: { category: string; name: string; item_type?: string; description?: string; options?: { label: string; value: string }[] }[]
 ): Promise<ApiResponse<InspectionItem[]>> {
   const itemsToInsert = items.map((item, index) => ({
     inspection_id: inspectionId,
@@ -271,6 +355,7 @@ export async function bulkAddInspectionItems(
     name: item.name,
     item_type: item.item_type || 'status',
     description: item.description || null,
+    options: item.options || null,
     status: 'pending' as ItemStatus,
     sort_order: index,
   }));
