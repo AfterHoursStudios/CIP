@@ -44,12 +44,27 @@ export default function LoginScreen() {
   }, []);
 
   async function handleAddToHomeScreen() {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setInstallPrompt(null);
-      setIsInstalled(true);
+    if (installPrompt) {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setInstallPrompt(null);
+        setIsInstalled(true);
+      }
+    } else {
+      // Fallback for browsers without beforeinstallprompt support
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (isIOS) {
+        Alert.alert(
+          'Add to Home Screen',
+          'Tap the Share button in Safari, then tap "Add to Home Screen"'
+        );
+      } else {
+        Alert.alert(
+          'Add to Home Screen',
+          'Open the browser menu (three dots) and tap "Install app" or "Add to Home Screen"'
+        );
+      }
     }
   }
 
@@ -121,7 +136,7 @@ export default function LoginScreen() {
           />
         </View>
 
-        {Platform.OS === 'web' && installPrompt && !isInstalled && (
+        {Platform.OS === 'web' && !isInstalled && (
           <TouchableOpacity style={styles.addToHomeButton} onPress={handleAddToHomeScreen}>
             <Ionicons name="download-outline" size={18} color={COLORS.white} />
             <Text style={styles.addToHomeText}>Add to Home Screen</Text>
