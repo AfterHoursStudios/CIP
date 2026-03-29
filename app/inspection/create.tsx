@@ -22,6 +22,8 @@ export default function CreateInspectionScreen() {
   const [projectAddress, setProjectAddress] = useState('');
   const [clientName, setClientName] = useState('');
   const [clientEmail, setClientEmail] = useState('');
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [inspectorName, setInspectorName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -52,6 +54,8 @@ export default function CreateInspectionScreen() {
         project_address: projectAddress.trim() || undefined,
         client_name: clientName.trim() || undefined,
         client_email: clientEmail.trim() || undefined,
+        scheduled_date: scheduledDate ? new Date(scheduledDate).toISOString() : undefined,
+        hcp_assigned_employee: inspectorName.trim() || undefined,
       }
     );
     setIsLoading(false);
@@ -88,6 +92,20 @@ export default function CreateInspectionScreen() {
             value={projectAddress}
             onChangeText={setProjectAddress}
             placeholder="Enter project address"
+          />
+
+          <Input
+            label="Scheduled Date"
+            value={scheduledDate}
+            onChangeText={setScheduledDate}
+            placeholder="YYYY-MM-DD"
+          />
+
+          <Input
+            label="Inspector Name"
+            value={inspectorName}
+            onChangeText={setInspectorName}
+            placeholder="Enter inspector name"
           />
         </Card>
 

@@ -9,27 +9,36 @@ import {
   RefreshControl,
   Alert,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuth, useCompany } from '../../src/contexts';
-import { Card } from '../../src/components/ui';
+import { Card, Button, Input } from '../../src/components/ui';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import * as hcpService from '../../src/services/housecallpro.service';
 import * as inspectionService from '../../src/services/inspection.service';
+import { isSubscriptionActive, PLAN_DETAILS } from '../../src/services/subscription.service';
 import type { Inspection } from '../../src/types';
 
 export default function ScheduleScreen() {
   const { user } = useAuth();
-  const { currentCompany } = useCompany();
+  const { currentCompany, companies, createCompany, subscription, createCheckoutSession } = useCompany();
+
+  const hasActiveSubscription = isSubscriptionActive(subscription?.status || null);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [isSubscribing, setIsSubscribing] = useState(false);
+  const [showCreateCompany, setShowCreateCompany] = useState(false);
+  const [companyName, setCompanyName] = useState('');
+  const [isCreatingCompany, setIsCreatingCompany] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isHcpConnected, setIsHcpConnected] = useState(false);
   const [allInspections, setAllInspections] = useState<Inspection[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [syncStatus, setSyncStatus] = useState<string>('');
+  const [lastSyncJobCount, setLastSyncJobCount] = useState<number>(0);
 
   // Generate array of dates for the date picker (7 days centered on selected)
   const dateOptions = useMemo(() => {
@@ -44,21 +53,45 @@ export default function ScheduleScreen() {
     return dates;
   }, []);
 
-  // Filter inspections for selected date
+  // Helper to get local date string (YYYY-MM-DD) without timezone shift
+  function toLocalDateStr(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // Filter inspections for selected date (exclude completed)
   const filteredInspections = useMemo(() => {
-    const selectedDateStr = selectedDate.toISOString().split('T')[0];
-    return allInspections.filter((inspection) => {
+    const selectedDateStr = toLocalDateStr(selectedDate);
+    const filtered = allInspections.filter((inspection) => {
       if (!inspection.scheduled_date) return false;
-      const inspectionDateStr = new Date(inspection.scheduled_date).toISOString().split('T')[0];
+      if (inspection.completed_date) return false; // Exclude completed inspections
+      const inspectionDateStr = toLocalDateStr(new Date(inspection.scheduled_date));
       return inspectionDateStr === selectedDateStr;
     }).sort((a, b) => {
       if (!a.scheduled_date || !b.scheduled_date) return 0;
       return new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime();
     });
+
+    // Debug log
+    console.log(`Schedule: ${filtered.length} inspections for ${selectedDateStr} (from ${allInspections.length} total)`);
+    if (filtered.length > 0) {
+      console.log('Filtered inspections:', filtered.map(i => ({
+        name: i.project_name,
+        date: i.scheduled_date,
+        hcpJobId: i.hcp_job_id,
+      })));
+    }
+
+    return filtered;
   }, [allInspections, selectedDate]);
 
   const loadData = useCallback(async (showSyncStatus = false) => {
-    if (!currentCompany || !user) return;
+    if (!currentCompany || !user) {
+      setIsLoading(false);
+      return;
+    }
 
     // Check HCP connection
     const connected = await hcpService.isConnected(currentCompany.id);
@@ -80,38 +113,78 @@ export default function ScheduleScreen() {
   async function syncHcpJobs() {
     if (!currentCompany || !user) return;
 
-    const { data: jobsData, error } = await hcpService.getScheduledJobs(currentCompany.id);
-
-    // Log full response for debugging
-    console.log('HCP Full Response:', JSON.stringify(jobsData, null, 2));
+    // Use getAllScheduledJobs to fetch all pages with progress updates
+    const { data: jobs, error } = await hcpService.getAllScheduledJobs(
+      currentCompany.id,
+      (fetched, total) => {
+        setSyncStatus(`Fetching jobs from Housecall Pro... (${fetched}/${total})`);
+      }
+    );
 
     if (error) {
-      console.error('Failed to fetch HCP jobs:', error);
+      console.error('HCP sync error:', error);
       return;
     }
 
-    if (!jobsData) {
-      console.log('No jobsData returned');
+    if (!jobs || !Array.isArray(jobs) || jobs.length === 0) {
+      console.log('HCP sync: No jobs returned from API');
+      setLastSyncJobCount(0);
       return;
     }
 
-    // Try to find jobs array - might be at different paths
-    const jobs = jobsData.jobs || jobsData.data || jobsData;
-    console.log('Jobs array:', jobs);
-
-    if (!Array.isArray(jobs) || jobs.length === 0) {
-      console.log('No jobs found or jobs is not an array');
-      return;
-    }
+    console.log(`HCP sync: Processing ${jobs.length} jobs from API`);
+    setLastSyncJobCount(jobs.length);
 
     let importedCount = 0;
+    let updatedCount = 0;
+    let skippedCompleted = 0;
+    let skippedNoDate = 0;
 
     for (const job of jobs) {
-      // Log job data for debugging
-      console.log('HCP Job data:', JSON.stringify(job, null, 2));
-
       // Get job number - HCP uses invoice_number
       const jobNumber = job.invoice_number || job.job_number || job.id;
+
+      // Check if already imported - try by job ID first, then by job number (filtered by company)
+      const { data: existing, error: lookupError } = await inspectionService.getInspectionByHcpJobId(job.id, jobNumber, currentCompany.id);
+
+      if (lookupError) {
+        console.error(`HCP sync: Lookup error for job ${job.id}:`, lookupError);
+      }
+
+      // Check job status
+      const status = (job.work_status || '').toLowerCase();
+      const isCompleted = status === 'complete' ||
+                          status === 'canceled' ||
+                          status === 'cancelled' ||
+                          status.includes('complete');
+
+      // If job is completed or canceled in HCP, mark local inspection as completed
+      if (isCompleted) {
+        skippedCompleted++;
+        if (existing && !existing.completed_date) {
+          setSyncStatus(`Marking job #${jobNumber} as completed...`);
+          await inspectionService.updateInspection(existing.id, {
+            completed_date: new Date().toISOString(),
+          });
+        }
+        continue; // Don't create new inspections for completed/canceled jobs
+      }
+
+      // Log job schedule info
+      const scheduleDate = job.schedule?.scheduled_start;
+      if (!scheduleDate) {
+        skippedNoDate++;
+        console.log(`HCP sync: Job #${jobNumber} has no scheduled date`);
+      } else {
+        // Check if this is a March 23 job
+        const jobDateStr = scheduleDate.substring(0, 10); // Get YYYY-MM-DD
+        if (jobDateStr === '2026-03-23') {
+          console.log(`HCP sync: *** MARCH 23 JOB *** #${jobNumber} - ${job.description || job.name} - status: ${job.work_status}`);
+        }
+        console.log(`HCP sync: Job #${jobNumber} scheduled for ${scheduleDate}`);
+      }
+
+      // Process all non-completed jobs (scheduled, unscheduled, in_progress, etc.)
 
       // Build address string
       const addressParts = [
@@ -135,25 +208,30 @@ export default function ScheduleScreen() {
           ).join(', ')
         : null;
 
-      // Check if already imported
-      const { data: existing } = await inspectionService.getInspectionByHcpJobId(job.id);
-
       if (existing) {
-        // Update existing inspection with latest data
+        // Update existing inspection with latest data (including hcp_job_id in case it changed)
         setSyncStatus(`Updating job #${jobNumber}...`);
-        await inspectionService.updateInspection(existing.id, {
+        const updateResult = await inspectionService.updateInspection(existing.id, {
           project_name: job.description || job.name || `Job #${jobNumber}`,
           project_address: fullAddress || null,
           client_name: clientName || null,
           client_email: job.customer?.email || null,
           scheduled_date: job.schedule?.scheduled_start || null,
+          hcp_job_id: job.id, // Update job ID in case it changed
           hcp_job_number: jobNumber,
           hcp_assigned_employee: assignedEmployee,
+          completed_date: null, // Clear completed_date if job is scheduled again
         });
+        if (updateResult.error) {
+          console.error(`HCP sync: Failed to update job #${jobNumber}:`, updateResult.error);
+        } else {
+          updatedCount++;
+        }
         continue;
       }
 
       setSyncStatus(`Importing job #${jobNumber}...`);
+      console.log(`HCP sync: Creating inspection for job #${jobNumber} (HCP ID: ${job.id}), scheduled: ${job.schedule?.scheduled_start || 'none'}`);
 
       // Create inspection - use description as project name
       const { data: inspection, error: createError } = await inspectionService.createInspection(
@@ -172,25 +250,26 @@ export default function ScheduleScreen() {
       );
 
       if (createError || !inspection) {
-        console.error('Failed to create inspection:', createError);
+        console.error(`HCP sync: Failed to create inspection for job #${jobNumber}:`, createError);
         continue;
       }
+
+      console.log(`HCP sync: Created inspection ${inspection.id} for job #${jobNumber}`);
 
       // No checklist items added here - inspector will choose template when they open the job
       importedCount++;
     }
 
-    if (importedCount > 0) {
-      showAlert('Sync Complete', `Imported ${importedCount} new job${importedCount > 1 ? 's' : ''} from Housecall Pro`);
-    }
+    console.log(`HCP sync complete: ${importedCount} imported, ${updatedCount} updated, ${skippedCompleted} completed, ${skippedNoDate} no date`);
   }
 
   async function loadInspections() {
     if (!currentCompany) return;
 
+    // Load more inspections to ensure we get all scheduled jobs
     const { data: inspections, error } = await inspectionService.getCompanyInspections(
       currentCompany.id,
-      { limit: 100 }
+      { limit: 500 }
     );
 
     if (error || !inspections) {
@@ -199,7 +278,36 @@ export default function ScheduleScreen() {
       return;
     }
 
-    setAllInspections(inspections);
+    // Filter out completed inspections for schedule view
+    const activeInspections = inspections.filter(i => !i.completed_date);
+    console.log(`Loaded ${inspections.length} inspections, ${activeInspections.length} active`);
+
+    // Debug: show all scheduled dates
+    const scheduledDates: { [key: string]: number } = {};
+    activeInspections.forEach(i => {
+      if (i.scheduled_date) {
+        const dateStr = toLocalDateStr(new Date(i.scheduled_date));
+        scheduledDates[dateStr] = (scheduledDates[dateStr] || 0) + 1;
+      }
+    });
+    console.log('Inspections by date:', scheduledDates);
+
+    // Debug: show HCP jobs specifically
+    const hcpJobs = activeInspections.filter(i => i.hcp_job_id);
+    console.log(`HCP jobs in database: ${hcpJobs.length}`);
+
+    // Debug: Show details for jobs on 3/23
+    const march23Jobs = activeInspections.filter(i => {
+      if (!i.scheduled_date) return false;
+      const dateStr = toLocalDateStr(new Date(i.scheduled_date));
+      return dateStr === '2026-03-23';
+    });
+    console.log(`Jobs for 2026-03-23: ${march23Jobs.length}`);
+    march23Jobs.forEach(j => {
+      console.log(`  - ${j.project_name} | HCP: ${j.hcp_job_id || 'N/A'} | Raw date: ${j.scheduled_date}`);
+    });
+
+    setAllInspections(activeInspections);
     setIsLoading(false);
   }
 
@@ -250,12 +358,13 @@ export default function ScheduleScreen() {
     });
   }
 
-  // Count inspections for a given date
+  // Count inspections for a given date (exclude completed)
   function getInspectionCount(date: Date): number {
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = toLocalDateStr(date);
     return allInspections.filter((inspection) => {
       if (!inspection.scheduled_date) return false;
-      const inspectionDateStr = new Date(inspection.scheduled_date).toISOString().split('T')[0];
+      if (inspection.completed_date) return false; // Exclude completed inspections
+      const inspectionDateStr = toLocalDateStr(new Date(inspection.scheduled_date));
       return inspectionDateStr === dateStr;
     }).length;
   }
@@ -287,6 +396,44 @@ export default function ScheduleScreen() {
     }
   }
 
+  async function handleSubscribe(plan: 'basic' | 'plus' | 'pro') {
+    setIsSubscribing(true);
+    const { url, error } = await createCheckoutSession(plan);
+    setIsSubscribing(false);
+
+    if (error) {
+      showAlert('Error', error);
+      return;
+    }
+
+    if (url) {
+      if (Platform.OS === 'web') {
+        window.location.href = url;
+      } else {
+        Linking.openURL(url);
+      }
+    }
+  }
+
+  function handleJobPress(inspectionId: string) {
+    if (!hasActiveSubscription) {
+      if (Platform.OS === 'web') {
+        alert('Subscription required to access inspections. Please subscribe to a plan.');
+      } else {
+        Alert.alert(
+          'Subscription Required',
+          'You need an active subscription to access inspections.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Subscribe', onPress: () => router.push('/settings/subscription') },
+          ]
+        );
+      }
+      return;
+    }
+    router.push(`/inspection/${inspectionId}`);
+  }
+
   useFocusEffect(
     useCallback(() => {
       setIsLoading(true);
@@ -309,6 +456,25 @@ export default function ScheduleScreen() {
     setSyncStatus('');
   }
 
+  async function handleCreateCompany() {
+    if (!companyName.trim()) {
+      showAlert('Error', 'Please enter a company name');
+      return;
+    }
+
+    setIsCreatingCompany(true);
+    const { error } = await createCompany(companyName.trim());
+    setIsCreatingCompany(false);
+
+    if (error) {
+      showAlert('Error', error);
+    } else {
+      setCompanyName('');
+      setShowCreateCompany(false);
+      showAlert('Success', 'Company created successfully');
+    }
+  }
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -316,6 +482,63 @@ export default function ScheduleScreen() {
         {isSyncing && syncStatus && (
           <Text style={styles.syncText}>{syncStatus}</Text>
         )}
+      </View>
+    );
+  }
+
+  // Show company setup if user has no company
+  if (!currentCompany) {
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.noCompanyContainer}>
+          <Ionicons name="business-outline" size={64} color={COLORS.gray400} />
+          <Text style={styles.noCompanyTitle}>No Company</Text>
+
+          {!showCreateCompany ? (
+            <View style={styles.noCompanyActions}>
+              <Card style={styles.noCompanyCard}>
+                <Ionicons name="mail-outline" size={32} color={COLORS.primary} />
+                <Text style={styles.noCompanyCardTitle}>Join a Company</Text>
+                <Text style={styles.noCompanyCardText}>
+                  Ask your company owner to send you an invitation to the email address you signed up with
+                </Text>
+              </Card>
+
+              <Text style={styles.orText}>OR</Text>
+
+              <Button
+                title="Create a Company"
+                onPress={() => setShowCreateCompany(true)}
+                fullWidth
+                icon={<Ionicons name="add-circle-outline" size={20} color={COLORS.white} />}
+              />
+            </View>
+          ) : (
+            <View style={styles.createCompanyForm}>
+              <Input
+                label="Company Name"
+                value={companyName}
+                onChangeText={setCompanyName}
+                placeholder="Enter company name"
+              />
+              <View style={styles.createCompanyButtons}>
+                <Button
+                  title="Cancel"
+                  onPress={() => {
+                    setShowCreateCompany(false);
+                    setCompanyName('');
+                  }}
+                  variant="outline"
+                />
+                <Button
+                  title="Create Company"
+                  onPress={handleCreateCompany}
+                  loading={isCreatingCompany}
+                />
+              </View>
+            </View>
+          )}
+        </ScrollView>
       </View>
     );
   }
@@ -429,8 +652,38 @@ export default function ScheduleScreen() {
           </TouchableOpacity>
         )}
 
+        {/* Jobs Summary Header */}
+        {isHcpConnected && lastSyncJobCount > 0 && (
+          <View style={styles.jobsSummaryHeader}>
+            <Text style={styles.jobsSummaryText}>
+              {lastSyncJobCount} job{lastSyncJobCount !== 1 ? 's' : ''} pulled from Housecall Pro
+            </Text>
+            <Text style={styles.jobsSummarySubtext}>
+              {allInspections.length} active job{allInspections.length !== 1 ? 's' : ''} in schedule
+            </Text>
+          </View>
+        )}
+
         {/* Selected Date Header */}
         <Text style={styles.selectedDateHeader}>{formatSelectedDateHeader()}</Text>
+
+        {/* Subscription Required Banner */}
+        {!hasActiveSubscription && filteredInspections.length > 0 && (
+          <View style={styles.subscriptionBanner}>
+            <Ionicons name="lock-closed" size={20} color={COLORS.warning} />
+            <View style={styles.subscriptionBannerText}>
+              <Text style={styles.subscriptionBannerTitle}>Subscription Required</Text>
+              <Text style={styles.subscriptionBannerSubtitle}>
+                Subscribe to access your inspections
+              </Text>
+            </View>
+            <Button
+              title="Subscribe"
+              onPress={() => router.push('/settings/subscription')}
+              size="sm"
+            />
+          </View>
+        )}
 
         {/* Inspections List */}
         {filteredInspections.length === 0 ? (
@@ -445,21 +698,42 @@ export default function ScheduleScreen() {
           filteredInspections.map((inspection) => (
             <TouchableOpacity
               key={inspection.id}
-              onPress={() => router.push(`/inspection/${inspection.id}`)}
+              onPress={() => handleJobPress(inspection.id)}
+              activeOpacity={hasActiveSubscription ? 0.7 : 1}
             >
-              <Card style={styles.inspectionCard}>
-                <View style={styles.inspectionHeader}>
+              <Card style={[
+                styles.inspectionCard,
+                !hasActiveSubscription && styles.inspectionCardDisabled,
+              ]}>
+                {!hasActiveSubscription && (
+                  <View style={styles.lockedOverlay}>
+                    <Ionicons name="lock-closed" size={24} color={COLORS.gray400} />
+                  </View>
+                )}
+                <View style={[
+                  styles.inspectionHeader,
+                  !hasActiveSubscription && styles.inspectionHeaderDisabled,
+                ]}>
                   <View style={styles.inspectionInfo}>
                     {inspection.scheduled_date && (
-                      <Text style={styles.inspectionTime}>
+                      <Text style={[
+                        styles.inspectionTime,
+                        !hasActiveSubscription && styles.textDisabled,
+                      ]}>
                         {formatTime(inspection.scheduled_date)}
                       </Text>
                     )}
-                    <Text style={styles.inspectionName}>
+                    <Text style={[
+                      styles.inspectionName,
+                      !hasActiveSubscription && styles.textDisabled,
+                    ]}>
                       {inspection.project_name}
                     </Text>
                     {inspection.client_name && (
-                      <Text style={styles.inspectionClient}>
+                      <Text style={[
+                        styles.inspectionClient,
+                        !hasActiveSubscription && styles.textDisabled,
+                      ]}>
                         {inspection.client_name}
                       </Text>
                     )}
@@ -468,9 +742,12 @@ export default function ScheduleScreen() {
                         <Ionicons
                           name="location-outline"
                           size={14}
-                          color={COLORS.textSecondary}
+                          color={hasActiveSubscription ? COLORS.textSecondary : COLORS.gray400}
                         />
-                        <Text style={styles.inspectionAddress} numberOfLines={1}>
+                        <Text style={[
+                          styles.inspectionAddress,
+                          !hasActiveSubscription && styles.textDisabled,
+                        ]} numberOfLines={1}>
                           {inspection.project_address}
                         </Text>
                       </View>
@@ -480,9 +757,12 @@ export default function ScheduleScreen() {
                         <Ionicons
                           name="person-outline"
                           size={14}
-                          color={COLORS.textSecondary}
+                          color={hasActiveSubscription ? COLORS.textSecondary : COLORS.gray400}
                         />
-                        <Text style={styles.employeeName}>
+                        <Text style={[
+                          styles.employeeName,
+                          !hasActiveSubscription && styles.textDisabled,
+                        ]}>
                           {inspection.hcp_assigned_employee}
                         </Text>
                       </View>
@@ -492,13 +772,19 @@ export default function ScheduleScreen() {
                     <View
                       style={[
                         styles.statusBadge,
-                        { backgroundColor: getStatusColor(inspection.completion_percentage ?? 0) + '20' },
+                        { backgroundColor: hasActiveSubscription
+                          ? getStatusColor(inspection.completion_percentage ?? 0) + '20'
+                          : COLORS.gray200
+                        },
                       ]}
                     >
                       <Text
                         style={[
                           styles.statusText,
-                          { color: getStatusColor(inspection.completion_percentage ?? 0) },
+                          { color: hasActiveSubscription
+                            ? getStatusColor(inspection.completion_percentage ?? 0)
+                            : COLORS.gray500
+                          },
                         ]}
                       >
                         {getStatusDisplayText(inspection.completion_percentage ?? 0)}
@@ -513,6 +799,30 @@ export default function ScheduleScreen() {
 
         <View style={{ height: SPACING.xl * 2 }} />
       </ScrollView>
+
+      <TouchableOpacity
+        style={[styles.fab, !hasActiveSubscription && styles.fabDisabled]}
+        onPress={() => {
+          if (!hasActiveSubscription) {
+            if (Platform.OS === 'web') {
+              alert('Subscription required to create inspections. Please subscribe to a plan.');
+            } else {
+              Alert.alert(
+                'Subscription Required',
+                'You need an active subscription to create inspections.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Subscribe', onPress: () => router.push('/settings/subscription') },
+                ]
+              );
+            }
+            return;
+          }
+          router.push('/inspection/create');
+        }}
+      >
+        <Ionicons name="add" size={28} color={COLORS.white} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -588,6 +898,22 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: SPACING.md,
+  },
+  jobsSummaryHeader: {
+    backgroundColor: COLORS.gray100,
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+  },
+  jobsSummaryText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textPrimary,
+  },
+  jobsSummarySubtext: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
   selectedDateHeader: {
     fontSize: FONT_SIZE.xl,
@@ -724,5 +1050,115 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xs,
     fontWeight: FONT_WEIGHT.medium,
     textTransform: 'capitalize',
+  },
+  noCompanyContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xl,
+    paddingTop: SPACING.xl * 2,
+  },
+  noCompanyTitle: {
+    fontSize: FONT_SIZE.xl,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textPrimary,
+    marginTop: SPACING.lg,
+    marginBottom: SPACING.xl,
+  },
+  noCompanyActions: {
+    width: '100%',
+    gap: SPACING.lg,
+  },
+  noCompanyCard: {
+    padding: SPACING.lg,
+    alignItems: 'center',
+  },
+  noCompanyCardTitle: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textPrimary,
+    marginTop: SPACING.md,
+  },
+  noCompanyCardText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.sm,
+  },
+  orText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  createCompanyForm: {
+    width: '100%',
+    gap: SPACING.md,
+  },
+  createCompanyButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: SPACING.sm,
+  },
+  // Subscription styles
+  subscriptionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF3E0',
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  subscriptionBannerText: {
+    flex: 1,
+  },
+  subscriptionBannerTitle: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.warning,
+  },
+  subscriptionBannerSubtitle: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+  },
+  inspectionCardDisabled: {
+    opacity: 0.7,
+    position: 'relative',
+  },
+  inspectionHeaderDisabled: {
+    opacity: 0.6,
+  },
+  lockedOverlay: {
+    position: 'absolute',
+    top: SPACING.sm,
+    right: SPACING.sm,
+    zIndex: 1,
+  },
+  textDisabled: {
+    color: COLORS.gray500,
+  },
+  fab: {
+    position: 'absolute',
+    right: SPACING.lg,
+    bottom: SPACING.lg,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.25)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.25,
+          shadowRadius: 4,
+        }),
+  } as any,
+  fabDisabled: {
+    backgroundColor: COLORS.gray400,
   },
 });
