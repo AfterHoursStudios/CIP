@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,34 @@ export default function LoginScreen() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || (window.navigator as any).standalone === true;
+    setIsInstalled(isStandalone);
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  async function handleAddToHomeScreen() {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+      setIsInstalled(true);
+    }
+  }
 
   function validate() {
     const newErrors: { email?: string; password?: string } = {};
@@ -92,6 +120,13 @@ export default function LoginScreen() {
             resizeMode="contain"
           />
         </View>
+
+        {Platform.OS === 'web' && installPrompt && !isInstalled && (
+          <TouchableOpacity style={styles.addToHomeButton} onPress={handleAddToHomeScreen}>
+            <Ionicons name="download-outline" size={18} color={COLORS.white} />
+            <Text style={styles.addToHomeText}>Add to Home Screen</Text>
+          </TouchableOpacity>
+        )}
 
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>Welcome Back</Text>
@@ -184,7 +219,24 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+    marginBottom: SPACING.md,
+  },
+  addToHomeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: RADIUS.full,
+    marginBottom: SPACING.lg,
+    alignSelf: 'center',
+  },
+  addToHomeText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: FONT_WEIGHT.medium,
+    color: COLORS.white,
   },
   logo: {
     width: 200,
