@@ -646,7 +646,7 @@ export default function ScheduleScreen() {
           >
             <Ionicons name="link-outline" size={18} color={COLORS.primary} />
             <Text style={styles.connectBannerText}>
-              Connect Housecall Pro to auto-import jobs
+              Connect Scheduling Platform
             </Text>
             <Ionicons name="chevron-forward" size={18} color={COLORS.primary} />
           </TouchableOpacity>
