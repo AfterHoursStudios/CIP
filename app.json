@@ -32,14 +32,18 @@
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.READ_MEDIA_IMAGES"
       ]
     },
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "CIP",
+      "shortName": "CIP",
+      "description": "Construction Inspection Pro - Professional inspection management",
+      "backgroundColor": "#1E3A5F",
+      "themeColor": "#1E3A5F"
     },
     "plugins": [
       "expo-router",
@@ -63,6 +67,12 @@
       "eas": {
         "projectId": "38a1a215-d072-48ca-8a08-fc385a44e2ce"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/38a1a215-d072-48ca-8a08-fc385a44e2ce"
     }
   }
 }
