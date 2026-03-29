@@ -7,12 +7,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  TouchableOpacity,
+  TextInput,
 } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useCompany } from '../../src/contexts';
 import * as inspectionService from '../../src/services/inspection.service';
 import { Button, Input, Card } from '../../src/components/ui';
-import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT } from '../../src/lib/constants';
+import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 
 export default function CreateInspectionScreen() {
   const { user } = useAuth();
@@ -94,12 +97,44 @@ export default function CreateInspectionScreen() {
             placeholder="Enter project address"
           />
 
-          <Input
-            label="Scheduled Date"
-            value={scheduledDate}
-            onChangeText={setScheduledDate}
-            placeholder="YYYY-MM-DD"
-          />
+          <View style={styles.dateInputContainer}>
+            <Text style={styles.inputLabel}>Scheduled Date</Text>
+            {Platform.OS === 'web' ? (
+              <input
+                type="date"
+                value={scheduledDate}
+                onChange={(e) => setScheduledDate(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: 12,
+                  fontSize: 16,
+                  borderRadius: 8,
+                  border: `1px solid ${COLORS.gray300}`,
+                  backgroundColor: COLORS.white,
+                  color: COLORS.textPrimary,
+                }}
+              />
+            ) : (
+              <TouchableOpacity
+                style={styles.dateButton}
+                onPress={() => {
+                  // For mobile, show a simple prompt for now
+                  Alert.prompt?.(
+                    'Enter Date',
+                    'Format: YYYY-MM-DD',
+                    (text) => text && setScheduledDate(text),
+                    'plain-text',
+                    scheduledDate
+                  ) || Alert.alert('Date', 'Enter date in format YYYY-MM-DD');
+                }}
+              >
+                <Ionicons name="calendar-outline" size={20} color={COLORS.textSecondary} />
+                <Text style={[styles.dateButtonText, !scheduledDate && styles.dateButtonPlaceholder]}>
+                  {scheduledDate || 'Select date'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           <Input
             label="Inspector Name"
@@ -157,5 +192,31 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHT.semibold,
     color: COLORS.textPrimary,
     marginBottom: SPACING.md,
+  },
+  dateInputContainer: {
+    marginBottom: SPACING.md,
+  },
+  inputLabel: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: FONT_WEIGHT.medium,
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.xs,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.white,
+  },
+  dateButtonText: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textPrimary,
+  },
+  dateButtonPlaceholder: {
+    color: COLORS.textSecondary,
   },
 });
