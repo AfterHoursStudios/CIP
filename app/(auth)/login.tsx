@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -24,54 +24,6 @@ export default function LoginScreen() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
-  const [installPrompt, setInstallPrompt] = useState<any>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-
-    // Register service worker for PWA
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(console.error);
-    }
-
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-      || (window.navigator as any).standalone === true;
-    setIsInstalled(isStandalone);
-
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-  }, []);
-
-  async function handleAddToHomeScreen() {
-    if (installPrompt) {
-      installPrompt.prompt();
-      const { outcome } = await installPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setInstallPrompt(null);
-        setIsInstalled(true);
-      }
-    } else {
-      // Fallback for browsers without beforeinstallprompt support
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-      if (isIOS) {
-        Alert.alert(
-          'Add to Home Screen',
-          'Tap the Share button in Safari, then tap "Add to Home Screen"'
-        );
-      } else {
-        Alert.alert(
-          'Add to Home Screen',
-          'Open the browser menu (three dots) and tap "Install app" or "Add to Home Screen"'
-        );
-      }
-    }
-  }
 
   function validate() {
     const newErrors: { email?: string; password?: string } = {};
@@ -141,11 +93,13 @@ export default function LoginScreen() {
           />
         </View>
 
-        {Platform.OS === 'web' && !isInstalled && (
-          <TouchableOpacity style={styles.addToHomeButton} onPress={handleAddToHomeScreen}>
-            <Ionicons name="download-outline" size={18} color={COLORS.white} />
-            <Text style={styles.addToHomeText}>Add to Home Screen</Text>
-          </TouchableOpacity>
+        {Platform.OS === 'web' && (
+          <Link href="/add-to-homescreen" asChild>
+            <TouchableOpacity style={styles.addToHomeButton}>
+              <Ionicons name="phone-portrait-outline" size={18} color={COLORS.white} />
+              <Text style={styles.addToHomeText}>Add to Home Screen</Text>
+            </TouchableOpacity>
+          </Link>
         )}
 
         <Card style={styles.card}>
