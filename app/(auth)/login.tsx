@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -24,41 +24,6 @@ export default function LoginScreen() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [installPrompt, setInstallPrompt] = useState<any>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-
-    // Check if already installed as PWA
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-      || (window.navigator as any).standalone === true;
-    setIsInstalled(isStandalone);
-
-    // Listen for the beforeinstallprompt event
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-  }, []);
-
-  async function handleAddToHomeScreen() {
-    if (!installPrompt) return;
-
-    installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setInstallPrompt(null);
-      setIsInstalled(true);
-    }
-  }
 
   function validate() {
     const newErrors: { email?: string; password?: string } = {};
@@ -78,31 +43,16 @@ export default function LoginScreen() {
   }
 
   async function handleLogin() {
-    // Prevent double-clicks
-    if (isLoading) return;
     if (!validate()) return;
 
-    setLoginError(null);
     setIsLoading(true);
+    const { error } = await signIn(email, password);
+    setIsLoading(false);
 
-    try {
-      console.log('Starting login...');
-      const { error } = await signIn(email, password);
-      console.log('Login result:', { error });
-
-      if (error) {
-        setLoginError(error);
-        setIsLoading(false);
-      } else {
-        console.log('Login successful, navigating to schedule...');
-        // Reset loading state before navigation
-        setIsLoading(false);
-        router.replace('/(tabs)/schedule');
-      }
-    } catch (err) {
-      console.error('Login error:', err);
-      setLoginError('An unexpected error occurred. Please try again.');
-      setIsLoading(false);
+    if (error) {
+      Alert.alert('Login Failed', error);
+    } else {
+      router.replace('/(tabs)');
     }
   }
 
@@ -135,25 +85,13 @@ export default function LoginScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        <Link href="/(marketing)" asChild>
-          <TouchableOpacity style={styles.header}>
-            <View style={styles.logoContainer}>
-              <Image
-                source={require('../../CIP Logo.png')}
-                style={styles.logoImage}
-                resizeMode="contain"
-              />
-              <Text style={styles.logoText}>Construction Inspection Pro</Text>
-            </View>
-          </TouchableOpacity>
-        </Link>
-
-        {Platform.OS === 'web' && installPrompt && !isInstalled && (
-          <TouchableOpacity style={styles.addToHomeButton} onPress={handleAddToHomeScreen}>
-            <Ionicons name="download-outline" size={18} color={COLORS.primary} />
-            <Text style={styles.addToHomeText}>Add to Home Screen</Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.header}>
+          <Image
+            source={require('../../assets/cip-logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        </View>
 
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>Welcome Back</Text>
@@ -185,13 +123,6 @@ export default function LoginScreen() {
           <Link href="/(auth)/forgot-password" asChild>
             <Text style={styles.forgotPassword}>Forgot Password?</Text>
           </Link>
-
-          {loginError && (
-            <View style={styles.errorContainer}>
-              <Ionicons name="alert-circle" size={20} color={COLORS.error} />
-              <Text style={styles.errorText}>{loginError}</Text>
-            </View>
-          )}
 
           <Button
             title="Sign In"
@@ -244,69 +175,27 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: COLORS.primary,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
     padding: SPACING.lg,
-    // @ts-ignore - web only
-    maxWidth: 440,
-    // @ts-ignore - web only
-    alignSelf: 'center',
-    width: '100%',
   },
   header: {
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.xl,
   },
-  addToHomeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACING.xs,
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.md,
-    backgroundColor: COLORS.primary + '15',
-    borderRadius: RADIUS.full,
-    marginBottom: SPACING.lg,
-    alignSelf: 'center',
-  },
-  addToHomeText: {
-    fontSize: FONT_SIZE.sm,
-    fontWeight: FONT_WEIGHT.medium,
-    color: COLORS.primary,
-  },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-  },
-  logoImage: {
-    width: 44,
-    height: 44,
-  },
-  logoText: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.primary,
+  logo: {
+    width: 200,
+    height: 100,
   },
   card: {
-    padding: SPACING.xl,
-    borderRadius: 20,
-    elevation: 10,
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.25)' }
-      : {
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 10 },
-          shadowOpacity: 0.25,
-          shadowRadius: 20,
-        }),
-  } as any,
+    padding: SPACING.lg,
+  },
   cardTitle: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: FONT_SIZE.xl,
+    fontWeight: FONT_WEIGHT.bold,
     color: COLORS.textPrimary,
     marginBottom: SPACING.xs,
   },
@@ -321,24 +210,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginBottom: SPACING.lg,
   },
-  errorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEE2E2',
-    padding: SPACING.md,
-    borderRadius: RADIUS.md,
-    marginBottom: SPACING.md,
-    gap: SPACING.sm,
-  },
-  errorText: {
-    flex: 1,
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.error,
-  },
   button: {
-    marginTop: SPACING.md,
-    borderRadius: 12,
-    height: 52,
+    marginTop: SPACING.sm,
   },
   divider: {
     flexDirection: 'row',
@@ -365,12 +238,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: SPACING.md,
-    borderRadius: 12,
+    borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.gray300,
     backgroundColor: COLORS.white,
     gap: SPACING.sm,
-    height: 48,
   },
   oauthButtonText: {
     fontSize: FONT_SIZE.md,
@@ -391,11 +263,12 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: FONT_SIZE.md,
-    color: COLORS.textSecondary,
+    color: COLORS.white,
   },
   footerLink: {
     fontSize: FONT_SIZE.md,
-    color: COLORS.primary,
+    color: COLORS.white,
     fontWeight: FONT_WEIGHT.semibold,
+    textDecorationLine: 'underline',
   },
 });
