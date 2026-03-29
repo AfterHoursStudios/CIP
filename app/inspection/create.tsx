@@ -57,7 +57,7 @@ export default function CreateInspectionScreen() {
         project_address: projectAddress.trim() || undefined,
         client_name: clientName.trim() || undefined,
         client_email: clientEmail.trim() || undefined,
-        scheduled_date: scheduledDate ? new Date(scheduledDate).toISOString() : undefined,
+        scheduled_date: scheduledDate ? `${scheduledDate}T12:00:00.000Z` : undefined,
         hcp_assigned_employee: inspectorName.trim() || undefined,
       }
     );
