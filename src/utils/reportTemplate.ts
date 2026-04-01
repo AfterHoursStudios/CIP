@@ -361,8 +361,15 @@ export function generateReportHtml(
           }
         }
         .no-break {
-          page-break-inside: avoid;
-          break-inside: avoid;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          display: block !important;
+          position: relative !important;
+        }
+        .item-wrapper {
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          padding-bottom: 4px;
         }
       </style>
     </head>
