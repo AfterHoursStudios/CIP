@@ -24,31 +24,36 @@ async function generatePDFBlobWeb(html: string): Promise<Blob> {
   const html2pdf = (await import('html2pdf.js')).default;
 
   // Create a container element
+  // A4 is 210mm wide, with 10mm margins = 190mm content width
+  // At 96 DPI: 190mm = ~718px, but we use a slightly smaller width for safety
   const container = document.createElement('div');
   container.innerHTML = html;
-  container.style.width = '800px'; // Fixed width for consistent rendering
+  container.style.width = '700px'; // Fits within A4 margins
+  container.style.maxWidth = '700px';
+  container.style.overflow = 'hidden';
   document.body.appendChild(container);
 
   try {
-    console.log('Generating PDF from HTML...');
     const pdfBlob = await html2pdf()
       .set({
-        margin: 10,
+        margin: [10, 10, 10, 10], // top, left, bottom, right in mm
         filename: 'report.pdf',
-        image: { type: 'jpeg', quality: 0.8 }, // Slightly lower quality to reduce size
+        image: { type: 'jpeg', quality: 0.8 },
         html2canvas: {
           scale: 2,
           useCORS: true,
-          allowTaint: true, // Allow cross-origin images even if they taint canvas
+          allowTaint: true,
           logging: false,
-          imageTimeout: 15000, // 15 second timeout for image loading
+          imageTimeout: 15000,
+          width: 700, // Match container width
+          windowWidth: 700,
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'], before: '.page-break-before', avoid: '.no-break' },
       })
       .from(container)
       .outputPdf('blob');
 
-    console.log('PDF generated successfully, size:', pdfBlob.size, 'bytes');
     return pdfBlob;
   } finally {
     document.body.removeChild(container);
@@ -65,9 +70,9 @@ export async function generateInspectionPDF(
 ): Promise<ApiResponse<PDFGenerationResult>> {
   try {
     const html = generateReportHtml(inspection, categories, company);
-    const fileName = `Inspection_${inspection.project_name.replace(/[^a-zA-Z0-9]/g, '_')}_${
-      new Date().toISOString().split('T')[0]
-    }.pdf`;
+    const clientName = (inspection.client_name || 'Client').replace(/[^a-zA-Z0-9]/g, '_');
+    const date = new Date().toISOString().split('T')[0];
+    const fileName = `${clientName}_${date}_Inspection.pdf`;
 
     if (Platform.OS === 'web') {
       // Generate actual PDF blob on web
@@ -111,7 +116,6 @@ export async function generateAndUploadReport(
 ): Promise<ApiResponse<{ pdfUri: string; attachmentId: string }>> {
   try {
     // Step 1: Generate PDF
-    console.log('Step 1: Generating PDF...');
     const pdfResult = await generateInspectionPDF(inspection, categories, company);
 
     if (pdfResult.error || !pdfResult.data) {
@@ -123,10 +127,8 @@ export async function generateAndUploadReport(
     }
 
     const { uri, fileName, blob } = pdfResult.data;
-    console.log('PDF generated:', fileName, 'blob size:', blob?.size || 'N/A');
 
     // Step 2: Upload to HCP
-    console.log('Step 2: Uploading to HCP job:', jobId);
     const uploadResult = await uploadJobAttachment(
       companyId,
       jobId,
@@ -143,7 +145,6 @@ export async function generateAndUploadReport(
       };
     }
 
-    console.log('Upload successful, attachment ID:', uploadResult.data.id);
     return {
       data: {
         pdfUri: uri,

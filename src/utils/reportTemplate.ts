@@ -1,4 +1,4 @@
-import type { Inspection, InspectionItem, MeasurementValue, Company } from '../types';
+import type { Inspection, InspectionItem, MeasurementValue, Company, ItemValue, SelectionOption } from '../types';
 
 interface CategoryGroup {
   category: string;
@@ -25,6 +25,107 @@ function formatMeasurement(value: MeasurementValue | null): string {
   if (value.feet) parts.push(`${value.feet}'`);
   if (value.inches) parts.push(`${value.inches}"`);
   return parts.length > 0 ? parts.join(' ') : '-';
+}
+
+function formatItemValue(item: InspectionItem): string {
+  const value = item.value;
+
+  switch (item.item_type) {
+    case 'measurement':
+      return formatMeasurement(value as MeasurementValue | null);
+    case 'number':
+      return value != null ? String(value) : '-';
+    case 'yesno':
+      if (value === true) return 'Yes';
+      if (value === false) return 'No';
+      return '-';
+    case 'passfail':
+      if (value === 'pass') return 'Pass';
+      if (value === 'fail') return 'Fail';
+      return '-';
+    case 'text':
+      return typeof value === 'string' && value ? value : '-';
+    case 'selection':
+      if (typeof value === 'string' && item.options) {
+        const option = item.options.find((opt: SelectionOption) => opt.value === value);
+        return option ? option.label : value;
+      }
+      return '-';
+    default:
+      return '-';
+  }
+}
+
+function getValueBadgeHtml(item: InspectionItem): string {
+  const formattedValue = formatItemValue(item);
+
+  // For yes/no, use colored badges
+  if (item.item_type === 'yesno') {
+    if (item.value === true) {
+      return `<span style="
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        background-color: #dcfce7;
+        color: #15803d;
+      ">Yes</span>`;
+    }
+    if (item.value === false) {
+      return `<span style="
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        background-color: #fee2e2;
+        color: #dc2626;
+      ">No</span>`;
+    }
+  }
+
+  // For pass/fail, use colored badges
+  if (item.item_type === 'passfail') {
+    if (item.value === 'pass') {
+      return `<span style="
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        background-color: #dcfce7;
+        color: #15803d;
+      ">Pass</span>`;
+    }
+    if (item.value === 'fail') {
+      return `<span style="
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        background-color: #fee2e2;
+        color: #dc2626;
+      ">Fail</span>`;
+    }
+  }
+
+  // For selection, use a blue badge
+  if (item.item_type === 'selection' && item.value) {
+    return `<span style="
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      background-color: #dbeafe;
+      color: #2563eb;
+    ">${formattedValue}</span>`;
+  }
+
+  // Default: just show the value
+  return `<span style="font-size: 14px; font-weight: 600; color: #1E3A5F;">${formattedValue}</span>`;
 }
 
 function formatDate(dateString: string | null): string {
@@ -60,6 +161,11 @@ export function generateReportHtml(
   categories: CategoryGroup[],
   company: Company | null
 ): string {
+  // Check if this is a Chimney Inspection (by category names containing "Chimney")
+  const isChimneyInspection = categories.some(cat =>
+    cat.category.toLowerCase().includes('chimney')
+  );
+
   const generatedDate = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -94,38 +200,89 @@ export function generateReportHtml(
           </div>`
         : '';
 
-      if (item.item_type === 'measurement') {
+      // Generate notes HTML for this item
+      const itemNotesHtml = item.notes
+        ? `<div style="
+            margin-top: 8px;
+            padding: 8px 12px;
+            background-color: #f0fdf4;
+            border-left: 3px solid #22c55e;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #374151;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          ">
+            <strong style="color: #15803d;">Note:</strong> ${item.notes}
+          </div>`
+        : '';
+
+      // Handle different item types
+      if (item.item_type === 'status') {
+        // Status type - show status badge
         return `
-          <div style="
+          <div class="no-break" style="
             padding: 12px 16px;
             ${borderStyle}
+            page-break-inside: avoid;
+            break-inside: avoid;
           ">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div style="flex: 1;">
                 <div style="font-size: 14px; color: #374151;">${item.name}</div>
                 ${item.description ? `<div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">${item.description}</div>` : ''}
               </div>
-              <div style="font-size: 14px; font-weight: 600; color: #1E3A5F;">
-                ${formatMeasurement(item.value)}
-              </div>
+              ${getStatusBadgeHtml(item.status)}
             </div>
+            ${itemNotesHtml}
             ${itemPhotosHtml}
           </div>
         `;
       }
 
+      if (item.item_type === 'text') {
+        // Text type - show the text value below the name
+        const textValue = typeof item.value === 'string' && item.value ? item.value : '-';
+        return `
+          <div class="no-break" style="
+            padding: 12px 16px;
+            ${borderStyle}
+            page-break-inside: avoid;
+            break-inside: avoid;
+          ">
+            <div style="font-size: 14px; color: #374151; font-weight: 500;">${item.name}</div>
+            ${item.description ? `<div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">${item.description}</div>` : ''}
+            <div style="
+              margin-top: 8px;
+              padding: 8px 12px;
+              background-color: #f9fafb;
+              border-radius: 4px;
+              font-size: 14px;
+              color: #374151;
+              white-space: pre-wrap;
+            ">${textValue}</div>
+            ${itemNotesHtml}
+            ${itemPhotosHtml}
+          </div>
+        `;
+      }
+
+      // For measurement, number, yesno, selection - show value on the right
       return `
-        <div style="
+        <div class="no-break" style="
           padding: 12px 16px;
           ${borderStyle}
+          page-break-inside: avoid;
+          break-inside: avoid;
         ">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div style="flex: 1;">
               <div style="font-size: 14px; color: #374151;">${item.name}</div>
               ${item.description ? `<div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">${item.description}</div>` : ''}
             </div>
-            ${getStatusBadgeHtml(item.status)}
+            ${getValueBadgeHtml(item)}
           </div>
+          ${itemNotesHtml}
           ${itemPhotosHtml}
         </div>
       `;
@@ -138,7 +295,9 @@ export function generateReportHtml(
         border-radius: 8px;
         overflow: hidden;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      ">
+        page-break-inside: avoid;
+        break-inside: avoid;
+      " class="no-break">
         <div style="
           background: #f9fafb;
           padding: 12px 16px;
@@ -178,6 +337,13 @@ export function generateReportHtml(
           background-color: #f5f5f5;
           color: #212121;
           line-height: 1.5;
+          max-width: 700px;
+          width: 100%;
+          overflow-x: hidden;
+        }
+        img {
+          max-width: 100%;
+          height: auto;
         }
         @page {
           margin: 10mm;
@@ -188,6 +354,18 @@ export function generateReportHtml(
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
+          .no-break {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .page-break-before {
+            page-break-before: always;
+            break-before: page;
+          }
+        }
+        .no-break {
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
       </style>
     </head>
@@ -195,7 +373,7 @@ export function generateReportHtml(
       <!-- Header -->
       <div style="
         background: linear-gradient(135deg, #1E3A5F 0%, #2E5077 100%);
-        padding: 32px;
+        padding: 24px 16px;
         color: white;
         margin-bottom: 24px;
       ">
@@ -222,7 +400,7 @@ export function generateReportHtml(
       <div style="
         background: white;
         padding: 24px;
-        margin: 0 24px 24px 24px;
+        margin: 0 16px 24px 16px;
         border-radius: 8px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
       ">
@@ -255,7 +433,7 @@ export function generateReportHtml(
       </div>
 
       <!-- Checklist Categories -->
-      <div style="margin: 0 24px 24px 24px;">
+      <div style="margin: 0 16px 24px 16px;">
         <h2 style="
           font-size: 18px;
           font-weight: 600;
@@ -272,7 +450,7 @@ export function generateReportHtml(
       <div style="
         background: white;
         padding: 24px;
-        margin: 0 24px 24px 24px;
+        margin: 0 16px 24px 16px;
         border-radius: 8px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         page-break-inside: avoid;
@@ -294,14 +472,17 @@ export function generateReportHtml(
       </div>
       ` : ''}
 
+      ${isChimneyInspection ? `
       <!-- NFPA Reminder -->
       <div style="
         background: #FFF8E1;
         border: 1px solid #FFE082;
         border-left: 4px solid #FFA000;
         padding: 20px 24px;
-        margin: 0 24px 24px 24px;
+        margin: 0 16px 24px 16px;
         border-radius: 8px;
+        page-break-inside: avoid;
+        break-inside: avoid;
       ">
         <p style="
           font-size: 14px;
@@ -321,15 +502,18 @@ export function generateReportHtml(
           Your next inspection is recommended by: ${formatDate(getNextYearDate())}
         </p>
       </div>
+      ` : ''}
 
       <!-- Footer -->
       <div style="
-        margin: 32px 24px;
+        margin: 32px 16px;
         padding-top: 24px;
         border-top: 1px solid #e5e7eb;
         text-align: center;
         color: #6b7280;
         font-size: 12px;
+        page-break-inside: avoid;
+        break-inside: avoid;
       ">
         <p>Report generated on ${generatedDate}</p>
         ${company ? `<p style="margin-top: 4px;">${company.name}${company.phone ? ` | ${company.phone}` : ''}${company.email ? ` | ${company.email}` : ''}</p>` : ''}
