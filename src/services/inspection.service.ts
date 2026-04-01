@@ -22,6 +22,9 @@ export async function createInspection(
     hcp_job_id?: string;
     hcp_job_number?: string;
     hcp_assigned_employee?: string;
+    jobber_job_id?: string;
+    jobber_job_number?: string;
+    jobber_assigned_employee?: string;
   }
 ): Promise<ApiResponse<Inspection>> {
   const { data: inspection, error } = await supabase
@@ -207,6 +210,107 @@ export async function deleteInspection(inspectionId: string): Promise<ApiRespons
   return { data: null, error: null };
 }
 
+// Check if Jobber job already imported - tries jobber_job_id first, then jobber_job_number as fallback
+// Must filter by company_id to avoid cross-company matches
+export async function getInspectionByJobberJobId(
+  jobberJobId: string,
+  jobberJobNumber?: string,
+  companyId?: string
+): Promise<ApiResponse<Inspection | null>> {
+  // First try to find by jobber_job_id (within company if specified)
+  let idQuery = supabase
+    .from('inspections')
+    .select('*')
+    .eq('jobber_job_id', jobberJobId);
+
+  if (companyId) {
+    idQuery = idQuery.eq('company_id', companyId);
+  }
+
+  const { data: byId, error: idError } = await idQuery.maybeSingle();
+
+  if (idError) {
+    return { data: null, error: idError.message };
+  }
+
+  if (byId) {
+    return { data: byId, error: null };
+  }
+
+  // If not found and we have a job number, try to find by jobber_job_number
+  if (jobberJobNumber) {
+    let numberQuery = supabase
+      .from('inspections')
+      .select('*')
+      .eq('jobber_job_number', jobberJobNumber);
+
+    if (companyId) {
+      numberQuery = numberQuery.eq('company_id', companyId);
+    }
+
+    const { data: byNumber, error: numberError } = await numberQuery.maybeSingle();
+
+    if (numberError) {
+      return { data: null, error: numberError.message };
+    }
+
+    return { data: byNumber, error: null };
+  }
+
+  return { data: null, error: null };
+}
+
+// Update Jobber sync status
+export async function updateJobberSyncStatus(
+  inspectionId: string
+): Promise<ApiResponse<Inspection>> {
+  const { data, error } = await supabase
+    .from('inspections')
+    .update({ jobber_synced_at: new Date().toISOString() })
+    .eq('id', inspectionId)
+    .select()
+    .single();
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return { data, error: null };
+}
+
+// Delete all Jobber-imported inspections for a company (used when disconnecting integration)
+export async function deleteJobberInspections(companyId: string): Promise<ApiResponse<{ count: number }>> {
+  // First get count of inspections to be deleted
+  const { data: inspections, error: fetchError } = await supabase
+    .from('inspections')
+    .select('id')
+    .eq('company_id', companyId)
+    .not('jobber_job_id', 'is', null);
+
+  if (fetchError) {
+    return { data: null, error: fetchError.message };
+  }
+
+  const count = inspections?.length || 0;
+
+  if (count === 0) {
+    return { data: { count: 0 }, error: null };
+  }
+
+  // Delete all Jobber-linked inspections
+  const { error: deleteError } = await supabase
+    .from('inspections')
+    .delete()
+    .eq('company_id', companyId)
+    .not('jobber_job_id', 'is', null);
+
+  if (deleteError) {
+    return { data: null, error: deleteError.message };
+  }
+
+  return { data: { count }, error: null };
+}
+
 // Delete all HCP-imported inspections for a company (used when disconnecting integration)
 export async function deleteHcpInspections(companyId: string): Promise<ApiResponse<{ count: number }>> {
   // First get count of inspections to be deleted
@@ -378,6 +482,8 @@ export async function addItemPhoto(
   photoUrl: string,
   caption?: string
 ): Promise<ApiResponse<InspectionPhoto>> {
+  console.log('addItemPhoto: Starting insert', { itemId, photoUrl: photoUrl.substring(0, 50) });
+
   const { data, error } = await supabase
     .from('inspection_photos')
     .insert({
@@ -389,9 +495,16 @@ export async function addItemPhoto(
     .single();
 
   if (error) {
-    return { data: null, error: error.message };
+    console.error('addItemPhoto: Insert failed', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint
+    });
+    return { data: null, error: `${error.message} (${error.code})` };
   }
 
+  console.log('addItemPhoto: Success', { photoId: data.id });
   return { data, error: null };
 }
 
@@ -421,6 +534,7 @@ export async function uploadPhoto(
   uri: string
 ): Promise<ApiResponse<string>> {
   try {
+    console.log('uploadPhoto: Starting', { companyId, inspectionId, uriStart: uri.substring(0, 50) });
     const fileName = `${companyId}/${inspectionId}/${Date.now()}.jpg`;
 
     let uploadData: Blob | Uint8Array;
