@@ -6,6 +6,13 @@ import { Platform } from 'react-native';
 export const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 export const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
+// Log Supabase config (safe - only shows if URL exists, not the actual values)
+console.log('Supabase config:', {
+  hasUrl: !!supabaseUrl,
+  hasKey: !!supabaseAnonKey,
+  urlStart: supabaseUrl ? supabaseUrl.substring(0, 30) + '...' : 'missing'
+});
+
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Missing Supabase environment variables!', { supabaseUrl: !!supabaseUrl, supabaseAnonKey: !!supabaseAnonKey });
 }

@@ -11,22 +11,36 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth, useCompany } from '../../src/contexts';
 import { Card, Button, Input } from '../../src/components/ui';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import * as hcpService from '../../src/services/housecallpro.service';
+import * as jobberService from '../../src/services/jobber.service';
 import * as companyService from '../../src/services/company.service';
+import { PLAN_DETAILS, isSubscriptionActive } from '../../src/services/subscription.service';
 import { supabase } from '../../src/lib/supabase';
 
 export default function ProfileScreen() {
   const { user, signOut } = useAuth();
-  const { currentCompany, companies, createCompany, isOwner, isAdmin, updateCompany, refreshCompanies } = useCompany();
+  const {
+    currentCompany,
+    companies,
+    createCompany,
+    isOwner,
+    isAdmin,
+    updateCompany,
+    refreshCompanies,
+    subscription,
+    refreshSubscription,
+  } = useCompany();
+  const params = useLocalSearchParams<{ subscription?: string }>();
   const [showCreateCompany, setShowCreateCompany] = useState(false);
   const [companyName, setCompanyName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [isHcpConnected, setIsHcpConnected] = useState(false);
+  const [isJobberConnected, setIsJobberConnected] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
@@ -35,14 +49,33 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      checkHcpConnection();
-    }, [currentCompany])
+      checkIntegrationConnections();
+      // Refresh subscription when returning from Stripe checkout
+      if (params.subscription === 'success') {
+        refreshSubscription();
+        if (Platform.OS === 'web') {
+          alert('Subscription activated successfully!');
+        } else {
+          Alert.alert('Success', 'Subscription activated successfully!');
+        }
+      } else if (params.subscription === 'canceled') {
+        if (Platform.OS === 'web') {
+          alert('Subscription checkout was canceled.');
+        } else {
+          Alert.alert('Canceled', 'Subscription checkout was canceled.');
+        }
+      }
+    }, [currentCompany, params.subscription])
   );
 
-  async function checkHcpConnection() {
+  async function checkIntegrationConnections() {
     if (!currentCompany) return;
-    const connected = await hcpService.isConnected(currentCompany.id);
-    setIsHcpConnected(connected);
+    const [hcpConnected, jobberConnected] = await Promise.all([
+      hcpService.isConnected(currentCompany.id),
+      jobberService.isConnected(currentCompany.id),
+    ]);
+    setIsHcpConnected(hcpConnected);
+    setIsJobberConnected(jobberConnected);
   }
 
   async function handleCreateCompany() {
@@ -67,7 +100,7 @@ export default function ProfileScreen() {
   async function handleSignOut() {
     const doSignOut = async () => {
       await signOut();
-      router.replace('/(auth)/login');
+      router.replace('/(marketing)');
     };
 
     if (Platform.OS === 'web') {
@@ -204,6 +237,7 @@ export default function ProfileScreen() {
     }
   }
 
+  
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* User Info */}
@@ -356,18 +390,62 @@ export default function ProfileScreen() {
           >
             <Ionicons name="link" size={24} color={COLORS.primary} />
             <View style={styles.settingContent}>
-              <Text style={styles.settingText}>Housecall Pro</Text>
-              {isHcpConnected ? (
+              <Text style={styles.settingText}>
+                {isHcpConnected || isJobberConnected
+                  ? `Connected to ${[
+                      isHcpConnected ? 'Housecall Pro' : '',
+                      isJobberConnected ? 'Jobber' : '',
+                    ].filter(Boolean).join(' & ')}`
+                  : 'Connect to your CRM platform'}
+              </Text>
+              {isHcpConnected || isJobberConnected ? (
                 <View style={styles.connectedBadge}>
                   <View style={styles.connectedDot} />
                   <Text style={styles.connectedText}>Connected</Text>
                 </View>
               ) : (
-                <Text style={styles.notConnectedText}>Not connected</Text>
+                <Text style={styles.notConnectedText}>Tap to connect Housecall Pro or Jobber</Text>
               )}
             </View>
             <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
           </TouchableOpacity>
+        </Card>
+      )}
+
+      {/* Subscription (Owner only) */}
+      {isOwner && currentCompany && (
+        <Card style={styles.card}>
+          <Text style={styles.sectionTitle}>Subscription</Text>
+
+          {subscription?.status && isSubscriptionActive(subscription.status) ? (
+            <TouchableOpacity
+              style={styles.subscriptionSummary}
+              onPress={() => router.push('/settings/subscription')}
+            >
+              <View style={styles.subscriptionSummaryLeft}>
+                <Text style={styles.subscriptionPlanName}>
+                  {subscription?.plan ? PLAN_DETAILS[subscription.plan]?.name || 'No Plan' : 'No Plan'}
+                </Text>
+                <View style={styles.subscriptionActiveBadge}>
+                  <View style={styles.subscriptionActiveDot} />
+                  <Text style={styles.subscriptionActiveText}>Active</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.subscriptionCta}>
+              <Text style={styles.subscriptionCtaText}>
+                Subscribe to unlock all features and start creating inspections.
+              </Text>
+              <Button
+                title="Subscribe to Get Started"
+                onPress={() => router.push('/settings/subscription')}
+                fullWidth
+                icon={<Ionicons name="card-outline" size={18} color={COLORS.white} />}
+              />
+            </View>
+          )}
         </Card>
       )}
 
@@ -425,19 +503,19 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        <TouchableOpacity style={styles.settingRow}>
-          <Ionicons name="notifications-outline" size={24} color={COLORS.gray600} />
-          <Text style={styles.settingText}>Notifications</Text>
-          <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.settingRow}>
+        <TouchableOpacity
+          style={styles.settingRow}
+          onPress={() => router.push('/settings/help')}
+        >
           <Ionicons name="help-circle-outline" size={24} color={COLORS.gray600} />
           <Text style={styles.settingText}>Help & Support</Text>
           <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.settingRow}>
+        <TouchableOpacity
+          style={[styles.settingRow, { borderBottomWidth: 0 }]}
+          onPress={() => router.push('/settings/privacy')}
+        >
           <Ionicons name="document-text-outline" size={24} color={COLORS.gray600} />
           <Text style={styles.settingText}>Privacy Policy</Text>
           <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
@@ -454,7 +532,7 @@ export default function ProfileScreen() {
         icon={<Ionicons name="log-out-outline" size={20} color={COLORS.primary} />}
       />
 
-      <Text style={styles.version}>Version 1.0.0</Text>
+      <Text style={styles.version}></Text>
     </ScrollView>
   );
 }
@@ -668,5 +746,51 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: SPACING.sm,
     marginTop: SPACING.sm,
+  },
+  // Subscription styles
+  subscriptionSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: SPACING.md,
+    backgroundColor: COLORS.gray50,
+    borderRadius: RADIUS.md,
+  },
+  subscriptionSummaryLeft: {
+    flex: 1,
+  },
+  subscriptionPlanName: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textPrimary,
+  },
+  subscriptionActiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: SPACING.xs,
+  },
+  subscriptionActiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.success,
+    marginRight: SPACING.xs,
+  },
+  subscriptionActiveText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.success,
+  },
+  subscriptionInactiveText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.xs,
+  },
+  subscriptionCta: {
+    gap: SPACING.md,
+  },
+  subscriptionCtaText: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+    lineHeight: 22,
   },
 });

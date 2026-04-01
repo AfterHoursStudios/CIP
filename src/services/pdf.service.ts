@@ -49,7 +49,7 @@ async function generatePDFBlobWeb(html: string): Promise<Blob> {
           windowWidth: 700,
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'], before: '.page-break-before', avoid: '.no-break' },
+        pagebreak: { mode: 'avoid-all', avoid: '.no-break' },
       })
       .from(container)
       .outputPdf('blob');

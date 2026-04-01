@@ -11,11 +11,8 @@ async function sendInvitationEmail(
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
     if (sessionError || !session?.access_token) {
-      console.error('No valid session for sending email:', sessionError);
       return;
     }
-
-    console.log('Sending invitation email to:', email);
 
     const response = await fetch(
       `${supabaseUrl}/functions/v1/send-invitation-email`,
@@ -38,12 +35,10 @@ async function sendInvitationEmail(
     const result = await response.json();
 
     if (!response.ok) {
-      console.error('Email send failed:', response.status, result);
-    } else {
-      console.log('Invitation email sent successfully:', result);
+      // Email send failed silently
     }
   } catch (error) {
-    console.error('Failed to send invitation email:', error);
+    // Failed to send invitation email
   }
 }
 
@@ -156,8 +151,6 @@ export async function inviteMember(
   companyName: string,
   inviterName: string
 ): Promise<ApiResponse<{ invited: boolean; type: 'added' | 'invited' }>> {
-  console.log('inviteMember called:', { email, companyName, role });
-
   const { data, error } = await supabase.rpc('invite_user_to_company', {
     p_company_id: companyId,
     p_email: email.toLowerCase(),
@@ -165,10 +158,12 @@ export async function inviteMember(
     p_inviter_id: inviterId,
   });
 
-  console.log('invite_user_to_company result:', { data, error });
-
   if (error) {
     return { data: null, error: error.message };
+  }
+
+  if (!data) {
+    return { data: null, error: 'No data returned' };
   }
 
   if (!data.success) {
@@ -176,8 +171,11 @@ export async function inviteMember(
   }
 
   // Send invitation email
-  console.log('Sending email, type:', data.type);
-  sendInvitationEmail(email.toLowerCase(), companyName, inviterName, role);
+  try {
+    await sendInvitationEmail(email.toLowerCase(), companyName, inviterName, role);
+  } catch (emailError) {
+    // Email failed but invitation was created
+  }
 
   return { data: { invited: true, type: data.type }, error: null };
 }
@@ -204,15 +202,12 @@ export async function removeMember(
   memberId: string,
   removerId: string
 ): Promise<ApiResponse<null>> {
-  console.log('Removing member:', memberId);
-
   const { data, error } = await supabase.rpc('remove_company_member', {
     p_member_id: memberId,
     p_remover_id: removerId,
   });
 
   if (error) {
-    console.error('Remove member error:', error);
     return { data: null, error: error.message };
   }
 
@@ -220,7 +215,6 @@ export async function removeMember(
     return { data: null, error: data.error };
   }
 
-  console.log('Member removed successfully, user deleted:', data.user_deleted);
   return { data: null, error: null };
 }
 
@@ -323,4 +317,94 @@ export async function removeCompanyLogo(
   }
 
   return { data: null, error: null };
+}
+
+export async function getCompanyOwner(
+  companyId: string
+): Promise<ApiResponse<CompanyMember | null>> {
+  const { data, error } = await supabase
+    .from('company_members')
+    .select('*, user:users(*)')
+    .eq('company_id', companyId)
+    .eq('role', 'owner')
+    .eq('is_active', true)
+    .single();
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return { data, error: null };
+}
+
+export interface InspectionReportEmailData {
+  companyId: string;
+  companyName: string;
+  inspectorName: string;
+  projectName: string;
+  projectAddress?: string;
+  clientName?: string;
+  completionPercentage: number;
+  pdfBase64?: string;
+  pdfFileName?: string;
+}
+
+export async function sendInspectionReportToOwner(
+  data: InspectionReportEmailData
+): Promise<ApiResponse<null>> {
+  try {
+    // Get company owner
+    const { data: owner, error: ownerError } = await getCompanyOwner(data.companyId);
+
+    if (ownerError || !owner) {
+      return { data: null, error: null };
+    }
+
+    const ownerEmail = owner.user?.email;
+    const ownerName = owner.user?.full_name;
+
+    if (!ownerEmail) {
+      return { data: null, error: null };
+    }
+
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      return { data: null, error: 'No valid session' };
+    }
+
+    const response = await fetch(
+      `${supabaseUrl}/functions/v1/send-inspection-report`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': supabaseAnonKey,
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          ownerEmail,
+          ownerName,
+          companyName: data.companyName,
+          inspectorName: data.inspectorName,
+          projectName: data.projectName,
+          projectAddress: data.projectAddress,
+          clientName: data.clientName,
+          completionPercentage: data.completionPercentage,
+          pdfBase64: data.pdfBase64,
+          pdfFileName: data.pdfFileName,
+        }),
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      return { data: null, error: result.error || 'Failed to send email' };
+    }
+
+    return { data: null, error: null };
+  } catch (error) {
+    return { data: null, error: (error as Error).message };
+  }
 }

@@ -18,6 +18,12 @@ export interface Company {
   logo_url: string | null;
   created_at: string;
   updated_at: string;
+  // Subscription fields (stored in companies table)
+  subscription_plan?: 'none' | 'basic' | 'plus' | 'pro';
+  subscription_status?: 'active' | 'inactive' | 'past_due' | 'canceled' | 'trialing' | 'unpaid';
+  subscription_current_period_end?: string | null;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
 }
 
 export type MemberRole = 'owner' | 'admin' | 'inspector';
@@ -58,16 +64,29 @@ export interface Inspection {
   hcp_job_number: string | null;
   hcp_assigned_employee: string | null;
   hcp_synced_at: string | null;
+  // Jobber integration
+  jobber_job_id: string | null;
+  jobber_job_number: string | null;
+  jobber_assigned_employee: string | null;
+  jobber_synced_at: string | null;
 }
 
 export type ItemStatus = 'pending' | 'satisfactory' | 'recommended' | 'unsafe' | 'na';
 
-export type ItemType = 'status' | 'measurement';
+export type ItemType = 'status' | 'measurement' | 'number' | 'yesno' | 'passfail' | 'text' | 'selection';
 
 export interface MeasurementValue {
   feet: number;
   inches: number;
 }
+
+export interface SelectionOption {
+  label: string;
+  value: string;
+}
+
+// Value types for different item types
+export type ItemValue = MeasurementValue | number | boolean | string | null;
 
 export interface InspectionItem {
   id: string;
@@ -77,7 +96,8 @@ export interface InspectionItem {
   description: string | null;
   status: ItemStatus;
   item_type: ItemType;
-  value: MeasurementValue | null;
+  value: ItemValue;
+  options?: SelectionOption[]; // For 'selection' type
   notes: string | null;
   sort_order: number;
   created_at: string;

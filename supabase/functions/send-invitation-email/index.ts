@@ -3,7 +3,7 @@ import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
 
 const GMAIL_USER = Deno.env.get('GMAIL_USER');
 const GMAIL_APP_PASSWORD = Deno.env.get('GMAIL_APP_PASSWORD');
-const APP_URL = Deno.env.get('APP_URL') || 'http://localhost:8081';
+const APP_URL = Deno.env.get('APP_URL') || 'https://www.cipro.us';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,7 +34,7 @@ serve(async (req) => {
     });
 
     // Link directly to the login page
-    const loginUrl = `${APP_URL}/(auth)/login`;
+    const loginUrl = `${APP_URL}/login`;
 
     await client.send({
       from: { name: "Construction Inspection Pro", mail: GMAIL_USER! },

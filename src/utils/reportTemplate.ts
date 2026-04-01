@@ -293,11 +293,8 @@ export function generateReportHtml(
         margin-bottom: 24px;
         background: white;
         border-radius: 8px;
-        overflow: hidden;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        page-break-inside: avoid;
-        break-inside: avoid;
-      " class="no-break">
+      ">
         <div style="
           background: #f9fafb;
           padding: 12px 16px;

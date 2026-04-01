@@ -25,6 +25,8 @@ export default function RegisterScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   async function handleGoogleSignIn() {
     setIsGoogleLoading(true);
@@ -66,18 +68,17 @@ export default function RegisterScreen() {
   async function handleRegister() {
     if (!validate()) return;
 
+    setRegisterError(null);
+    setSuccessMessage(null);
     setIsLoading(true);
     const { error } = await signUp(email, password, fullName);
     setIsLoading(false);
 
     if (error) {
-      Alert.alert('Registration Failed', error);
+      setRegisterError(error);
     } else {
-      Alert.alert(
-        'Account Created',
-        'Please check your email to verify your account.',
-        [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
-      );
+      // Go to schedule - it handles the "no company" case
+      router.replace('/(tabs)/schedule');
     }
   }
 
@@ -146,6 +147,20 @@ export default function RegisterScreen() {
             leftIcon="lock-closed-outline"
             error={errors.confirmPassword}
           />
+
+          {registerError && (
+            <View style={styles.errorContainer}>
+              <Ionicons name="alert-circle" size={20} color={COLORS.error} />
+              <Text style={styles.errorText}>{registerError}</Text>
+            </View>
+          )}
+
+          {successMessage && (
+            <View style={styles.successContainer}>
+              <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+              <Text style={styles.successText}>{successMessage}</Text>
+            </View>
+          )}
 
           <Button
             title="Create Account"
@@ -216,6 +231,34 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: SPACING.md,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.error,
+  },
+  successContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DCFCE7',
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  successText: {
+    flex: 1,
+    fontSize: FONT_SIZE.sm,
+    color: '#166534',
   },
   divider: {
     flexDirection: 'row',

@@ -6,7 +6,14 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:web": "expo export --platform web",
+    "serve": "npx serve dist",
+    "deploy": "npm run build:web && node scripts/fix-fonts.js && node scripts/deploy.js",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -21,11 +28,13 @@
     "expo-file-system": "~19.0.21",
     "expo-image-picker": "~17.0.10",
     "expo-linking": "~8.0.11",
+    "expo-notifications": "~0.32.16",
     "expo-print": "~15.0.8",
     "expo-router": "~6.0.23",
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.16",
     "expo-web-browser": "~15.0.10",
     "html2pdf.js": "^0.14.0",
     "react": "19.1.0",
@@ -37,6 +46,7 @@
     "react-native-web": "^0.21.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   },

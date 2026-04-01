@@ -25,15 +25,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Check initial session
     checkUser();
 
-    // Listen for auth changes
+    // Listen for auth changes (only handle sign out - sign in is handled by signIn function)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
-          const { data } = await authService.getCurrentUser();
-          setUser(data);
-        } else if (event === 'SIGNED_OUT') {
+      (event, session) => {
+        console.log('Auth state change:', event);
+        if (event === 'SIGNED_OUT') {
           setUser(null);
+          clearStaleSession();
         }
+        // Don't handle SIGNED_IN here - it's handled by the signIn function
+        // This prevents race conditions and double-fetching
       }
     );
 
@@ -41,27 +42,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function checkUser() {
-    console.log('Checking user authentication...');
-
     // Add timeout to prevent infinite loading
     const timeout = setTimeout(() => {
-      console.log('Auth check timed out, proceeding without user');
+      console.log('Auth check timeout - clearing stale session');
+      clearStaleSession();
       setUser(null);
       setIsLoading(false);
     }, 5000);
 
     try {
-      const { data } = await authService.getCurrentUser();
+      const { data, error } = await authService.getCurrentUser();
       clearTimeout(timeout);
-      console.log('Auth check complete, user:', data ? 'found' : 'not found');
-      setUser(data);
+      if (error || !data) {
+        // Clear stale session if auth fails
+        clearStaleSession();
+        setUser(null);
+      } else {
+        setUser(data);
+      }
     } catch (error) {
       clearTimeout(timeout);
-      console.log('Auth check error:', error);
+      clearStaleSession();
       setUser(null);
     } finally {
       clearTimeout(timeout);
       setIsLoading(false);
+    }
+  }
+
+  function clearStaleSession() {
+    if (typeof window !== 'undefined') {
+      // Clear localStorage
+      const localKeysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth'))) {
+          localKeysToRemove.push(key);
+        }
+      }
+      localKeysToRemove.forEach(key => window.localStorage.removeItem(key));
+
+      // Clear sessionStorage
+      const sessionKeysToRemove: string[] = [];
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const key = window.sessionStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth'))) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+      sessionKeysToRemove.forEach(key => window.sessionStorage.removeItem(key));
     }
   }
 
@@ -74,16 +103,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signIn(email: string, password: string) {
-    const { data, error } = await authService.signIn(email, password);
-    if (data) {
-      setUser(data);
+    try {
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise<{ data: null; error: string }>((resolve) => {
+        setTimeout(() => resolve({ data: null, error: 'Login timed out. Please try again.' }), 15000);
+      });
+
+      const signInPromise = authService.signIn(email, password);
+      const { data, error } = await Promise.race([signInPromise, timeoutPromise]);
+
+      if (data) {
+        setUser(data);
+      }
+      return { error };
+    } catch (err) {
+      console.error('SignIn error:', err);
+      return { error: 'Login failed. Please try again.' };
     }
-    return { error };
   }
 
   async function signOut() {
-    await authService.signOut();
+    // Clear user state first
     setUser(null);
+
+    // Sign out from Supabase
+    await authService.signOut();
+
+    // Force clear ALL session data from localStorage on web
+    if (typeof window !== 'undefined') {
+      // Clear all Supabase-related keys
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => window.localStorage.removeItem(key));
+
+      // Also clear sessionStorage
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const key = window.sessionStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth'))) {
+          window.sessionStorage.removeItem(key);
+        }
+      }
+    }
   }
 
   async function resetPassword(email: string) {

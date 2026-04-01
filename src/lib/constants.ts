@@ -84,29 +84,35 @@ export const RADIUS = {
   full: 9999,
 };
 
+import { Platform, ViewStyle } from 'react-native';
+
+// Shadow helper for cross-platform shadows
+function createShadow(
+  offsetY: number,
+  blur: number,
+  opacity: number,
+  elevation: number
+): ViewStyle {
+  if (Platform.OS === 'web') {
+    return {
+      // @ts-ignore - boxShadow is web-only
+      boxShadow: `0px ${offsetY}px ${blur}px rgba(0, 0, 0, ${opacity})`,
+    };
+  }
+  return {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: offsetY },
+    shadowOpacity: opacity,
+    shadowRadius: blur,
+    elevation,
+  };
+}
+
 // Shadows
 export const SHADOWS = {
-  sm: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  md: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  lg: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 8,
-  },
+  sm: createShadow(1, 2, 0.1, 2),
+  md: createShadow(2, 4, 0.15, 4),
+  lg: createShadow(4, 8, 0.2, 8),
 };
 
 // Inspection statuses

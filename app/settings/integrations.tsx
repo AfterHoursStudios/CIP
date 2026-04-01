@@ -9,31 +9,44 @@ import {
   Alert,
   Platform,
 } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import { Card, Button, Input } from '../../src/components/ui';
 import { useCompany, useAuth } from '../../src/contexts';
 import * as hcpService from '../../src/services/housecallpro.service';
+import * as jobberService from '../../src/services/jobber.service';
 import * as inspectionService from '../../src/services/inspection.service';
 
 export default function IntegrationsScreen() {
   const { user } = useAuth();
   const { currentCompany, isAdmin } = useCompany();
+  const params = useLocalSearchParams<{ success?: string; error?: string }>();
 
   // HCP State
-  const [isConnected, setIsConnected] = useState(false);
+  const [isHcpConnected, setIsHcpConnected] = useState(false);
   const [isCheckingConnection, setIsCheckingConnection] = useState(true);
   const [apiKey, setApiKey] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
+  // Jobber State
+  const [isJobberConnected, setIsJobberConnected] = useState(false);
+  const [isJobberConnecting, setIsJobberConnecting] = useState(false);
+
   const checkConnection = useCallback(async () => {
     if (!currentCompany) return;
 
     setIsCheckingConnection(true);
-    const connected = await hcpService.isConnected(currentCompany.id);
-    setIsConnected(connected);
+
+    // Check both connections in parallel
+    const [hcpConnected, jobberConnected] = await Promise.all([
+      hcpService.isConnected(currentCompany.id),
+      jobberService.isConnected(currentCompany.id),
+    ]);
+
+    setIsHcpConnected(hcpConnected);
+    setIsJobberConnected(jobberConnected);
     setIsCheckingConnection(false);
   }, [currentCompany]);
 
@@ -41,7 +54,17 @@ export default function IntegrationsScreen() {
     checkConnection();
   }, [checkConnection]);
 
-  async function handleConnect() {
+  // Handle OAuth callback params
+  useEffect(() => {
+    if (params.success === 'jobber') {
+      showAlert('Success', 'Connected to Jobber! All team members can now sync jobs.');
+      checkConnection();
+    } else if (params.error) {
+      showAlert('Error', params.error);
+    }
+  }, [params.success, params.error]);
+
+  async function handleHcpConnect() {
     if (!currentCompany || !user) return;
 
     if (!apiKey.trim()) {
@@ -64,14 +87,27 @@ export default function IntegrationsScreen() {
       return;
     }
 
-    setIsConnected(true);
+    setIsHcpConnected(true);
     setShowApiKeyInput(false);
     setApiKey('');
     setIsConnecting(false);
     showAlert('Success', 'Connected to Housecall Pro! All team members can now sync jobs.');
   }
 
-  async function handleDisconnect() {
+  async function handleJobberConnect() {
+    if (!currentCompany || !user) return;
+
+    setIsJobberConnecting(true);
+    const { error } = await jobberService.startOAuthFlow(currentCompany.id, user.id);
+
+    if (error) {
+      setIsJobberConnecting(false);
+      showAlert('Configuration Error', error);
+    }
+    // Note: If successful, the page will redirect, so we don't need to set state back
+  }
+
+  async function handleHcpDisconnect() {
     if (!currentCompany) return;
 
     const doDisconnect = async () => {
@@ -85,7 +121,7 @@ export default function IntegrationsScreen() {
 
       // Remove the API key
       await hcpService.removeApiKey(currentCompany.id);
-      setIsConnected(false);
+      setIsHcpConnected(false);
 
       const jobCount = data?.count || 0;
       if (jobCount > 0) {
@@ -94,6 +130,59 @@ export default function IntegrationsScreen() {
     };
 
     const message = 'Are you sure you want to disconnect from Housecall Pro? This will remove all jobs imported from HCP and affect all team members.';
+
+    if (Platform.OS === 'web') {
+      if (confirm(message)) {
+        doDisconnect();
+      }
+    } else {
+      Alert.alert(
+        'Disconnect',
+        message,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Disconnect', style: 'destructive', onPress: doDisconnect },
+        ]
+      );
+    }
+  }
+
+  async function handleJobberTest() {
+    if (!currentCompany) return;
+
+    showAlert('Testing...', 'Testing Jobber connection...');
+    const { data, error } = await jobberService.testConnection(currentCompany.id);
+
+    if (error) {
+      showAlert('Test Failed', `Error: ${error}`);
+    } else {
+      showAlert('Test Passed', 'Jobber connection is working!');
+    }
+  }
+
+  async function handleJobberDisconnect() {
+    if (!currentCompany) return;
+
+    const doDisconnect = async () => {
+      // Delete all Jobber-imported inspections
+      const { data, error } = await inspectionService.deleteJobberInspections(currentCompany.id);
+
+      if (error) {
+        showAlert('Error', 'Failed to remove Jobber jobs: ' + error);
+        return;
+      }
+
+      // Remove the integration
+      await jobberService.disconnect(currentCompany.id);
+      setIsJobberConnected(false);
+
+      const jobCount = data?.count || 0;
+      if (jobCount > 0) {
+        showAlert('Disconnected', `Removed ${jobCount} job${jobCount === 1 ? '' : 's'} imported from Jobber.`);
+      }
+    };
+
+    const message = 'Are you sure you want to disconnect from Jobber? This will remove all jobs imported from Jobber and affect all team members.';
 
     if (Platform.OS === 'web') {
       if (confirm(message)) {
@@ -162,17 +251,17 @@ export default function IntegrationsScreen() {
               <View>
                 <Text style={styles.integrationName}>Housecall Pro</Text>
                 <Text style={styles.integrationStatus}>
-                  {isConnected ? 'Connected' : 'Not connected'}
+                  {isHcpConnected ? 'Connected' : 'Not connected'}
                 </Text>
               </View>
             </View>
             <View style={[
               styles.statusDot,
-              { backgroundColor: isConnected ? '#22c55e' : COLORS.gray400 }
+              { backgroundColor: isHcpConnected ? '#22c55e' : COLORS.gray400 }
             ]} />
           </View>
 
-          {isConnected && (
+          {isHcpConnected && (
             <View style={styles.connectedInfo}>
               <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
               <Text style={styles.connectedInfoText}>
@@ -181,7 +270,7 @@ export default function IntegrationsScreen() {
             </View>
           )}
 
-          {!isConnected ? (
+          {!isHcpConnected ? (
             <>
               {showApiKeyInput ? (
                 <View style={styles.connectForm}>
@@ -299,7 +388,7 @@ export default function IntegrationsScreen() {
                     />
                     <Button
                       title="Connect"
-                      onPress={handleConnect}
+                      onPress={handleHcpConnect}
                       loading={isConnecting}
                       style={styles.connectButton}
                     />
@@ -320,7 +409,72 @@ export default function IntegrationsScreen() {
               <Button
                 title="Disconnect"
                 variant="outline"
-                onPress={handleDisconnect}
+                onPress={handleHcpDisconnect}
+                style={styles.disconnectButton}
+              />
+            </View>
+          )}
+        </Card>
+
+        {/* Jobber Section */}
+        <Card style={styles.integrationCard}>
+          <View style={styles.integrationHeader}>
+            <View style={styles.integrationInfo}>
+              <View style={[styles.integrationIcon, { backgroundColor: '#E8F5E9' }]}>
+                <Ionicons name="briefcase" size={24} color="#4CAF50" />
+              </View>
+              <View>
+                <Text style={styles.integrationName}>Jobber</Text>
+                <Text style={styles.integrationStatus}>
+                  {isJobberConnected ? 'Connected' : 'Not connected'}
+                </Text>
+              </View>
+            </View>
+            <View style={[
+              styles.statusDot,
+              { backgroundColor: isJobberConnected ? '#22c55e' : COLORS.gray400 }
+            ]} />
+          </View>
+
+          {isJobberConnected && (
+            <View style={styles.connectedInfo}>
+              <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
+              <Text style={styles.connectedInfoText}>
+                All team members can sync jobs from Jobber
+              </Text>
+            </View>
+          )}
+
+          {!isJobberConnected ? (
+            <View style={styles.connectForm}>
+              <View style={styles.noteBox}>
+                <Ionicons name="information-circle" size={18} color={COLORS.info} />
+                <Text style={styles.noteText}>
+                  API access requires a Jobber Grow plan or higher. You will be redirected to Jobber to authorize the connection.
+                </Text>
+              </View>
+
+              <Button
+                title="Connect Jobber"
+                onPress={handleJobberConnect}
+                loading={isJobberConnecting}
+                fullWidth
+                style={styles.connectMainButton}
+                icon={<Ionicons name="link" size={18} color={COLORS.white} />}
+              />
+            </View>
+          ) : (
+            <View style={styles.connectedActions}>
+              <Button
+                title="Test Connection"
+                variant="outline"
+                onPress={handleJobberTest}
+                style={[styles.disconnectButton, { marginRight: SPACING.sm }]}
+              />
+              <Button
+                title="Disconnect"
+                variant="outline"
+                onPress={handleJobberDisconnect}
                 style={styles.disconnectButton}
               />
             </View>

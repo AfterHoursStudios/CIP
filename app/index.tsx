@@ -1,13 +1,13 @@
-import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { Redirect } from 'expo-router';
-import { useAuth } from '../src/contexts';
+import { useAuth, useCompany } from '../src/contexts';
 import { COLORS } from '../src/lib/constants';
 
 export default function Index() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { companies, isLoading: companyLoading } = useCompany();
 
-  if (isLoading) {
+  if (authLoading || (isAuthenticated && companyLoading)) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color={COLORS.primary} />
@@ -16,10 +16,10 @@ export default function Index() {
   }
 
   if (isAuthenticated) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/(tabs)/schedule" />;
   }
 
-  return <Redirect href="/(auth)/login" />;
+  return <Redirect href="/(marketing)" />;
 }
 
 const styles = StyleSheet.create({

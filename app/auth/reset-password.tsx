@@ -33,7 +33,6 @@ export default function ResetPasswordScreen() {
       const refreshToken = params.refresh_token as string;
 
       if (accessToken && refreshToken) {
-        console.log('Setting session from URL tokens...');
         const { error } = await supabase.auth.setSession({
           access_token: accessToken,
           refresh_token: refreshToken,

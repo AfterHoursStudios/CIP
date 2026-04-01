@@ -1,232 +1,267 @@
-import { supabase } from '../lib/supabase';
-import type {
-  CompanySubscription,
-  SubscriptionTier,
-  SubscriptionStatus,
-  ApiResponse,
-} from '../types';
+import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase';
+import type { ApiResponse } from '../types';
 
-export interface SubscriptionPlan {
-  tier: SubscriptionTier;
+export type SubscriptionPlan = 'none' | 'basic' | 'plus' | 'pro';
+export type SubscriptionStatus = 'active' | 'inactive' | 'past_due' | 'canceled' | 'trialing' | 'unpaid';
+export type BillingInterval = 'monthly' | 'yearly';
+
+export interface SubscriptionInfo {
+  plan: SubscriptionPlan;
+  status: SubscriptionStatus;
+  currentPeriodEnd: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+}
+
+export interface PlanDetails {
   name: string;
   price: number | null;
+  yearlyPrice: number | null;
+  employeeLimit: number;
   memberRange: string;
-  minMembers: number;
-  maxMembers: number | null;
   features: string[];
   contactSupport?: boolean;
 }
 
-export const SUBSCRIPTION_PLANS: Record<SubscriptionTier, SubscriptionPlan> = {
+export const PLAN_DETAILS: Record<SubscriptionPlan, PlanDetails> = {
+  none: {
+    name: 'No Plan',
+    price: null,
+    yearlyPrice: null,
+    employeeLimit: 1,
+    memberRange: 'Owner only',
+    features: ['Limited access', 'Upgrade required to invite team members'],
+  },
   basic: {
-    tier: 'basic',
     name: 'Basic',
     price: 79,
-    memberRange: '1 login',
-    minMembers: 1,
-    maxMembers: 1,
+    yearlyPrice: 854,
+    employeeLimit: 1,
+    memberRange: '1 employee',
     features: [
       '1 team member',
       'Unlimited inspections',
       'PDF report generation',
-      'Email reports to clients',
-      'Offline support',
+      'Email reports to owner',
+      'HouseCall Pro integration',
     ],
   },
   plus: {
-    tier: 'plus',
     name: 'Plus',
     price: 99,
-    memberRange: '2-9 logins',
-    minMembers: 2,
-    maxMembers: 9,
+    yearlyPrice: 1069,
+    employeeLimit: 9,
+    memberRange: '2-9 employees',
     features: [
       'Up to 9 team members',
-      'Unlimited inspections',
-      'PDF report generation',
-      'Email reports to clients',
-      'Offline support',
+      'Everything in Basic',
+      'Team management',
+      'Priority support',
     ],
   },
   pro: {
-    tier: 'pro',
     name: 'Pro',
     price: 119,
-    memberRange: '10-19 logins',
-    minMembers: 10,
-    maxMembers: 19,
+    yearlyPrice: 1285,
+    employeeLimit: 20,
+    memberRange: '10-20 employees',
     features: [
-      'Up to 19 team members',
-      'Unlimited inspections',
-      'PDF report generation',
-      'Email reports to clients',
-      'Offline support',
-      'Priority support',
-    ],
-  },
-  enterprise: {
-    tier: 'enterprise',
-    name: 'Enterprise',
-    price: null,
-    memberRange: '20+ logins',
-    minMembers: 20,
-    maxMembers: null,
-    contactSupport: true,
-    features: [
-      'Unlimited team members',
-      'Unlimited inspections',
-      'PDF report generation',
-      'Email reports to clients',
-      'Offline support',
-      'Priority support',
-      'Custom integrations',
-      'Dedicated account manager',
+      'Up to 20 team members',
+      'Everything in Plus',
+      'Advanced reporting',
+      'Dedicated support',
     ],
   },
 };
 
-export async function getCompanySubscription(
-  companyId: string
-): Promise<ApiResponse<CompanySubscription>> {
+export const ENTERPRISE_INFO = {
+  name: 'Enterprise',
+  memberRange: '20+ employees',
+  features: [
+    'Unlimited team members',
+    'Everything in Pro',
+    'Custom integrations',
+    'Dedicated account manager',
+  ],
+  contactSupport: true,
+};
+
+export async function getSubscriptionInfo(companyId: string): Promise<ApiResponse<SubscriptionInfo>> {
   const { data, error } = await supabase
-    .from('company_subscriptions')
-    .select('*')
-    .eq('company_id', companyId)
+    .from('companies')
+    .select('subscription_plan, subscription_status, subscription_current_period_end, stripe_customer_id, stripe_subscription_id')
+    .eq('id', companyId)
     .single();
 
   if (error) {
-    if (error.code === 'PGRST116') {
-      return { data: null, error: null };
-    }
     return { data: null, error: error.message };
   }
 
-  return { data, error: null };
-}
-
-export async function hasActiveSubscription(companyId: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('company_has_active_subscription', {
-    p_company_id: companyId,
-  });
-
-  if (error) {
-    console.error('Error checking subscription:', error);
-    return false;
-  }
-
-  return data === true;
+  return {
+    data: {
+      plan: (data.subscription_plan || 'none') as SubscriptionPlan,
+      status: (data.subscription_status || 'inactive') as SubscriptionStatus,
+      currentPeriodEnd: data.subscription_current_period_end,
+      stripeCustomerId: data.stripe_customer_id,
+      stripeSubscriptionId: data.stripe_subscription_id,
+    },
+    error: null,
+  };
 }
 
 export async function createCheckoutSession(
   companyId: string,
-  successUrl: string,
-  cancelUrl: string,
-  tier?: SubscriptionTier
-): Promise<ApiResponse<{ checkoutUrl: string; sessionId: string }>> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session) {
-    return { data: null, error: 'Not authenticated' };
-  }
-
+  plan: 'basic' | 'plus' | 'pro',
+  interval: BillingInterval = 'monthly'
+): Promise<ApiResponse<{ sessionId: string; url: string }>> {
   try {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
-    if (!supabaseUrl || !supabaseAnonKey) {
-      return { data: null, error: 'Supabase configuration missing' };
+    if (sessionError || !session?.access_token) {
+      return { data: null, error: 'Not authenticated' };
     }
 
-    const response = await fetch(
-      `${supabaseUrl}/functions/v1/stripe-create-checkout`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: supabaseAnonKey,
-        },
-        body: JSON.stringify({ companyId, successUrl, cancelUrl, tier }),
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+    try {
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/create-checkout-session`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': supabaseAnonKey,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            companyId,
+            plan,
+            interval,
+            successUrl: `${origin}/(tabs)/profile?subscription=success`,
+            cancelUrl: `${origin}/(tabs)/profile?subscription=canceled`,
+          }),
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        return { data: null, error: result.error || 'Failed to create checkout session' };
       }
-    );
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      return {
-        data: null,
-        error: data.error || `Request failed with status ${response.status}`,
-      };
+      return { data: result, error: null };
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        return { data: null, error: 'Request timed out. Please try again.' };
+      }
+      throw fetchError;
     }
-
-    return {
-      data: {
-        checkoutUrl: data.checkoutUrl,
-        sessionId: data.sessionId,
-      },
-      error: null,
-    };
   } catch (error) {
+    console.error('createCheckoutSession error:', error);
     return { data: null, error: (error as Error).message };
   }
 }
 
-export async function createPortalSession(
-  companyId: string,
-  returnUrl: string
-): Promise<ApiResponse<{ portalUrl: string }>> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session) {
-    return { data: null, error: 'Not authenticated' };
-  }
-
+export async function createPortalSession(companyId: string): Promise<ApiResponse<{ url: string }>> {
   try {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
-    if (!supabaseUrl || !supabaseAnonKey) {
-      return { data: null, error: 'Supabase configuration missing' };
+    if (sessionError || !session?.access_token) {
+      return { data: null, error: 'Not authenticated' };
     }
 
-    const response = await fetch(`${supabaseUrl}/functions/v1/stripe-portal`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-        apikey: supabaseAnonKey,
-      },
-      body: JSON.stringify({ companyId, returnUrl }),
-    });
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
-    const data = await response.json();
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-    if (!response.ok) {
-      return {
-        data: null,
-        error: data.error || `Request failed with status ${response.status}`,
-      };
+    try {
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/create-portal-session`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': supabaseAnonKey,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            companyId,
+            returnUrl: `${origin}/(tabs)/profile`,
+          }),
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        return { data: null, error: result.error || 'Failed to create portal session' };
+      }
+
+      return { data: result, error: null };
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        return { data: null, error: 'Request timed out. Please try again.' };
+      }
+      throw fetchError;
     }
-
-    return { data: { portalUrl: data.portalUrl }, error: null };
   } catch (error) {
+    console.error('createPortalSession error:', error);
     return { data: null, error: (error as Error).message };
   }
 }
 
-export function getPlanForTier(tier: SubscriptionTier): SubscriptionPlan {
-  return SUBSCRIPTION_PLANS[tier];
+export async function canAddEmployee(companyId: string): Promise<ApiResponse<{
+  allowed: boolean;
+  reason?: string;
+  currentCount: number;
+  limit: number;
+  plan: string;
+  nextPlan?: string;
+}>> {
+  const { data, error } = await supabase.rpc('can_add_employee', {
+    p_company_id: companyId,
+  });
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return {
+    data: {
+      allowed: data.allowed,
+      reason: data.reason,
+      currentCount: data.current_count,
+      limit: data.limit,
+      plan: data.plan,
+      nextPlan: data.next_plan,
+    },
+    error: null,
+  };
 }
 
-export function getTierForMemberCount(count: number): SubscriptionTier {
-  if (count >= 20) return 'enterprise';
-  if (count >= 10) return 'pro';
-  if (count >= 2) return 'plus';
-  return 'basic';
+export function getRequiredPlanForEmployeeCount(count: number): SubscriptionPlan {
+  if (count <= 1) return 'basic';
+  if (count <= 9) return 'plus';
+  if (count <= 20) return 'pro';
+  return 'pro'; // Enterprise needed - contact support
+}
+
+export function getPlanDisplayName(plan: SubscriptionPlan): string {
+  return PLAN_DETAILS[plan]?.name || 'Unknown';
 }
 
 export function formatStatus(status: SubscriptionStatus): {
@@ -234,15 +269,11 @@ export function formatStatus(status: SubscriptionStatus): {
   color: string;
   bgColor: string;
 } {
-  const statusMap: Record<
-    SubscriptionStatus,
-    { label: string; color: string; bgColor: string }
-  > = {
+  const statusMap: Record<SubscriptionStatus, { label: string; color: string; bgColor: string }> = {
     active: { label: 'Active', color: '#2E7D32', bgColor: '#E8F5E9' },
+    inactive: { label: 'Inactive', color: '#757575', bgColor: '#F5F5F5' },
     past_due: { label: 'Past Due', color: '#C62828', bgColor: '#FFEBEE' },
     canceled: { label: 'Canceled', color: '#757575', bgColor: '#F5F5F5' },
-    incomplete: { label: 'Incomplete', color: '#F57C00', bgColor: '#FFF3E0' },
-    incomplete_expired: { label: 'Expired', color: '#757575', bgColor: '#F5F5F5' },
     trialing: { label: 'Trial', color: '#1565C0', bgColor: '#E3F2FD' },
     unpaid: { label: 'Unpaid', color: '#C62828', bgColor: '#FFEBEE' },
   };
@@ -250,7 +281,7 @@ export function formatStatus(status: SubscriptionStatus): {
   return statusMap[status] || { label: status, color: '#757575', bgColor: '#F5F5F5' };
 }
 
-export function canAccessFeatures(status: SubscriptionStatus | null): boolean {
+export function isSubscriptionActive(status: SubscriptionStatus | null): boolean {
   if (!status) return false;
-  return ['active', 'trialing', 'past_due'].includes(status);
+  return ['active', 'trialing'].includes(status);
 }

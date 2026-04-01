@@ -9,12 +9,15 @@ import {
   TouchableOpacity,
   Modal,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useCompany, useAuth } from '../../src/contexts';
+import type { EmployeeLimitInfo } from '../../src/contexts/CompanyContext';
 import { Card, Button, Input } from '../../src/components/ui';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import * as companyService from '../../src/services/company.service';
+import { PLAN_DETAILS, ENTERPRISE_INFO } from '../../src/services/subscription.service';
 import type { MemberRole, CompanyMember } from '../../src/types';
 import type { PendingInvitation } from '../../src/services/company.service';
 
@@ -32,10 +35,14 @@ export default function TeamScreen() {
     isLoading,
     isOwner,
     isAdmin,
+    subscription,
     inviteMember,
     updateMemberRole,
     removeMember,
     refreshMembers,
+    checkCanAddEmployee,
+    createCheckoutSession,
+    createPortalSession,
   } = useCompany();
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -44,6 +51,9 @@ export default function TeamScreen() {
   const [selectedMember, setSelectedMember] = useState<CompanyMember | null>(null);
   const [showMemberModal, setShowMemberModal] = useState(false);
   const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([]);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [employeeLimitInfo, setEmployeeLimitInfo] = useState<EmployeeLimitInfo | null>(null);
+  const [isUpgrading, setIsUpgrading] = useState(false);
 
   const loadPendingInvitations = useCallback(async () => {
     if (!currentCompany || !isAdmin) return;
@@ -54,6 +64,71 @@ export default function TeamScreen() {
   useEffect(() => {
     loadPendingInvitations();
   }, [loadPendingInvitations]);
+
+  async function handleShowInviteForm() {
+    if (showInvite) {
+      // Closing the form
+      setShowInvite(false);
+      return;
+    }
+
+    // Check if can add employee before showing form
+    const limitInfo = await checkCanAddEmployee();
+    if (limitInfo && !limitInfo.allowed) {
+      setEmployeeLimitInfo(limitInfo);
+      setShowUpgradeModal(true);
+      return;
+    }
+
+    setShowInvite(true);
+  }
+
+  async function handleUpgrade(plan: 'basic' | 'plus' | 'pro') {
+    setIsUpgrading(true);
+    const { url, error } = await createCheckoutSession(plan);
+    setIsUpgrading(false);
+
+    if (error) {
+      if (Platform.OS === 'web') {
+        alert('Error: ' + error);
+      } else {
+        Alert.alert('Error', error);
+      }
+      return;
+    }
+
+    if (url) {
+      if (Platform.OS === 'web') {
+        window.location.href = url;
+      } else {
+        Linking.openURL(url);
+      }
+      setShowUpgradeModal(false);
+    }
+  }
+
+  async function handleManageSubscription() {
+    setIsUpgrading(true);
+    const { url, error } = await createPortalSession();
+    setIsUpgrading(false);
+
+    if (error) {
+      if (Platform.OS === 'web') {
+        alert('Error: ' + error);
+      } else {
+        Alert.alert('Error', error);
+      }
+      return;
+    }
+
+    if (url) {
+      if (Platform.OS === 'web') {
+        window.location.href = url;
+      } else {
+        Linking.openURL(url);
+      }
+    }
+  }
 
   async function handleCancelInvitation(invitationId: string) {
     const doDelete = async () => {
@@ -86,13 +161,24 @@ export default function TeamScreen() {
   }
 
   async function handleInvite() {
+    // Prevent double-invocation
+    if (isInviting) return;
+
     if (!inviteEmail.trim()) {
-      Alert.alert('Error', 'Please enter an email address');
+      if (Platform.OS === 'web') {
+        alert('Error: Please enter an email address');
+      } else {
+        Alert.alert('Error', 'Please enter an email address');
+      }
       return;
     }
 
     if (!/\S+@\S+\.\S+/.test(inviteEmail)) {
-      Alert.alert('Error', 'Please enter a valid email address');
+      if (Platform.OS === 'web') {
+        alert('Error: Please enter a valid email address');
+      } else {
+        Alert.alert('Error', 'Please enter a valid email address');
+      }
       return;
     }
 
@@ -101,9 +187,17 @@ export default function TeamScreen() {
     setIsInviting(false);
 
     if (error) {
-      Alert.alert('Error', error);
+      if (Platform.OS === 'web') {
+        alert('Error: ' + error);
+      } else {
+        Alert.alert('Error', error);
+      }
     } else {
-      Alert.alert('Success', 'Team member invited successfully');
+      if (Platform.OS === 'web') {
+        alert('Success: Team member invited successfully');
+      } else {
+        Alert.alert('Success', 'Team member invited successfully');
+      }
       setInviteEmail('');
       setInviteRole('inspector');
       setShowInvite(false);
@@ -197,7 +291,7 @@ export default function TeamScreen() {
         <View style={styles.header}>
           <Button
             title={showInvite ? 'Cancel' : 'Invite Member'}
-            onPress={() => setShowInvite(!showInvite)}
+            onPress={handleShowInviteForm}
             variant={showInvite ? 'outline' : 'primary'}
             icon={
               <Ionicons
@@ -400,6 +494,106 @@ export default function TeamScreen() {
                   icon={<Ionicons name="trash-outline" size={18} color={COLORS.error} />}
                 />
               </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Upgrade Modal */}
+      <Modal
+        visible={showUpgradeModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowUpgradeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.upgradeModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Upgrade Required</Text>
+              <TouchableOpacity onPress={() => setShowUpgradeModal(false)}>
+                <Ionicons name="close" size={24} color={COLORS.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.upgradeInfo}>
+              <Ionicons name="people" size={48} color={COLORS.primary} />
+              <Text style={styles.upgradeTitle}>Employee Limit Reached</Text>
+              <Text style={styles.upgradeText}>
+                You have {employeeLimitInfo?.currentCount || 0} team members on the{' '}
+                {employeeLimitInfo?.plan ? PLAN_DETAILS[employeeLimitInfo.plan as keyof typeof PLAN_DETAILS]?.name || employeeLimitInfo.plan : 'current'} plan
+                (limit: {employeeLimitInfo?.limit || 0}).
+              </Text>
+              <Text style={styles.upgradeText}>
+                Upgrade to add more team members.
+              </Text>
+            </View>
+
+            {employeeLimitInfo?.nextPlan && employeeLimitInfo.nextPlan !== 'enterprise' && (
+              <TouchableOpacity
+                style={styles.planCard}
+                onPress={() => handleUpgrade(employeeLimitInfo.nextPlan as 'basic' | 'plus' | 'pro')}
+                disabled={isUpgrading}
+              >
+                <View style={styles.planCardHeader}>
+                  <Text style={styles.planName}>
+                    {PLAN_DETAILS[employeeLimitInfo.nextPlan as keyof typeof PLAN_DETAILS]?.name}
+                  </Text>
+                  <Text style={styles.planPrice}>
+                    ${PLAN_DETAILS[employeeLimitInfo.nextPlan as keyof typeof PLAN_DETAILS]?.price}/mo
+                  </Text>
+                </View>
+                <Text style={styles.planMembers}>
+                  {PLAN_DETAILS[employeeLimitInfo.nextPlan as keyof typeof PLAN_DETAILS]?.memberRange}
+                </Text>
+                <View style={styles.planFeatures}>
+                  {PLAN_DETAILS[employeeLimitInfo.nextPlan as keyof typeof PLAN_DETAILS]?.features.map((feature, index) => (
+                    <View key={index} style={styles.planFeature}>
+                      <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                      <Text style={styles.planFeatureText}>{feature}</Text>
+                    </View>
+                  ))}
+                </View>
+                <View style={styles.upgradeButtonWrapper}>
+                  <Button
+                    title={isUpgrading ? 'Processing...' : `Upgrade to ${PLAN_DETAILS[employeeLimitInfo.nextPlan as keyof typeof PLAN_DETAILS]?.name}`}
+                    onPress={() => handleUpgrade(employeeLimitInfo.nextPlan as 'basic' | 'plus' | 'pro')}
+                    loading={isUpgrading}
+                    fullWidth
+                  />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {employeeLimitInfo?.nextPlan === 'enterprise' && (
+              <View style={styles.enterpriseCard}>
+                <View style={styles.planCardHeader}>
+                  <Text style={styles.planName}>{ENTERPRISE_INFO.name}</Text>
+                  <Text style={styles.enterprisePrice}>Contact Us</Text>
+                </View>
+                <Text style={styles.planMembers}>{ENTERPRISE_INFO.memberRange}</Text>
+                <View style={styles.planFeatures}>
+                  {ENTERPRISE_INFO.features.map((feature, index) => (
+                    <View key={index} style={styles.planFeature}>
+                      <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                      <Text style={styles.planFeatureText}>{feature}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={styles.enterpriseText}>
+                  Contact support for enterprise pricing.
+                </Text>
+              </View>
+            )}
+
+            {subscription?.stripeCustomerId && (
+              <Button
+                title="Manage Subscription"
+                onPress={handleManageSubscription}
+                variant="outline"
+                fullWidth
+                style={styles.manageButton}
+                loading={isUpgrading}
+              />
             )}
           </View>
         </View>
@@ -718,5 +912,96 @@ const styles = StyleSheet.create({
     padding: SPACING.sm,
     backgroundColor: '#FFEBEE',
     borderRadius: RADIUS.sm,
+  },
+  // Upgrade modal styles
+  upgradeModalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: RADIUS.xl,
+    borderTopRightRadius: RADIUS.xl,
+    padding: SPACING.lg,
+    maxHeight: '90%',
+  },
+  upgradeInfo: {
+    alignItems: 'center',
+    paddingVertical: SPACING.lg,
+  },
+  upgradeTitle: {
+    fontSize: FONT_SIZE.xl,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.textPrimary,
+    marginTop: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  upgradeText: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginBottom: SPACING.xs,
+  },
+  planCard: {
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginTop: SPACING.md,
+    backgroundColor: '#F0F7FF',
+  },
+  enterpriseCard: {
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginTop: SPACING.md,
+    backgroundColor: COLORS.gray50,
+  },
+  planCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+  },
+  planName: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.textPrimary,
+  },
+  planPrice: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: FONT_WEIGHT.bold,
+    color: COLORS.primary,
+  },
+  enterprisePrice: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textSecondary,
+  },
+  planMembers: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    marginBottom: SPACING.md,
+  },
+  planFeatures: {
+    gap: SPACING.xs,
+  },
+  planFeature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  planFeatureText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textPrimary,
+  },
+  upgradeButtonWrapper: {
+    marginTop: SPACING.lg,
+  },
+  enterpriseText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.md,
+  },
+  manageButton: {
+    marginTop: SPACING.md,
   },
 });

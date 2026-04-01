@@ -9,7 +9,7 @@ import {
   Alert,
   Platform,
 } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useCompany } from '../../src/contexts';
 import { Card } from '../../src/components/ui';
@@ -19,9 +19,11 @@ import type { ChecklistTemplate } from '../../src/services/checklist-template.se
 
 export default function TemplatesScreen() {
   const { currentCompany, isAdmin } = useCompany();
+  const router = useRouter();
 
   const [isLoading, setIsLoading] = useState(true);
   const [systemTemplates, setSystemTemplates] = useState<ChecklistTemplate[]>([]);
+  const [customTemplates, setCustomTemplates] = useState<ChecklistTemplate[]>([]);
   const [enabledTemplateIds, setEnabledTemplateIds] = useState<Set<string>>(new Set());
   const [defaultTemplateId, setDefaultTemplateId] = useState<string | null>(null);
   const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null);
@@ -36,6 +38,12 @@ export default function TemplatesScreen() {
     const { data: templates } = await templateService.getSystemTemplates();
     if (templates) {
       setSystemTemplates(templates);
+    }
+
+    // Load custom templates
+    const { data: custom } = await templateService.getCompanyCustomTemplates(currentCompany.id);
+    if (custom) {
+      setCustomTemplates(custom);
     }
 
     // Load company's enabled templates
@@ -109,6 +117,36 @@ export default function TemplatesScreen() {
     setIsUpdating(null);
   }
 
+  async function handleDeleteTemplate(templateId: string, templateName: string) {
+    if (!currentCompany || !isAdmin) return;
+
+    const confirmDelete = Platform.OS === 'web'
+      ? window.confirm(`Delete "${templateName}"? This cannot be undone.`)
+      : await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Delete Template',
+            `Delete "${templateName}"? This cannot be undone.`,
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          );
+        });
+
+    if (!confirmDelete) return;
+
+    setIsUpdating(templateId);
+    const { error } = await templateService.deleteCustomTemplate(templateId, currentCompany.id);
+    setIsUpdating(null);
+
+    if (error) {
+      showAlert('Error', error);
+    } else {
+      setCustomTemplates(prev => prev.filter(t => t.id !== templateId));
+      showAlert('Success', 'Template deleted');
+    }
+  }
+
   function showAlert(title: string, message: string) {
     if (Platform.OS === 'web') {
       alert(`${title}: ${message}`);
@@ -174,9 +212,87 @@ export default function TemplatesScreen() {
     <>
       <Stack.Screen options={{ title: 'Checklist Templates' }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <Text style={styles.description}>
-          Select which checklist templates your team can use when creating inspections.
-          The default template will be pre-selected for new inspections.
+        {/* Create Custom Template Button */}
+        <TouchableOpacity
+          style={styles.createButton}
+          onPress={() => router.push('/settings/template-builder')}
+        >
+          <Ionicons name="add-circle-outline" size={24} color={COLORS.white} />
+          <Text style={styles.createButtonText}>Create Custom Template</Text>
+        </TouchableOpacity>
+
+        {/* Custom Templates Section */}
+        {customTemplates.length > 0 && (
+          <View style={styles.sectionContainer}>
+            <Text style={styles.sectionTitle}>My Custom Templates</Text>
+            {customTemplates.map((template) => {
+              const isEnabled = enabledTemplateIds.has(template.id);
+              const isDefault = defaultTemplateId === template.id;
+              const isExpanded = expandedTemplateId === template.id;
+
+              return (
+                <Card key={template.id} style={styles.templateCard}>
+                  <TouchableOpacity
+                    style={styles.templateHeader}
+                    onPress={() => setExpandedTemplateId(isExpanded ? null : template.id)}
+                  >
+                    <View style={[styles.iconContainer, { backgroundColor: '#10b98120' }]}>
+                      <Ionicons name="create-outline" size={24} color="#10b981" />
+                    </View>
+                    <View style={styles.templateInfo}>
+                      <Text style={styles.templateName}>{template.name}</Text>
+                      <Text style={styles.templateMeta}>
+                        {template.categories.length} categories
+                        {isDefault && ' • Default'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.editButton}
+                      onPress={() => router.push(`/settings/template-builder?id=${template.id}`)}
+                    >
+                      <Ionicons name="pencil-outline" size={18} color={COLORS.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={() => handleDeleteTemplate(template.id, template.name)}
+                    >
+                      <Ionicons name="trash-outline" size={18} color={COLORS.error} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.toggleButton, isEnabled && styles.toggleButtonActive]}
+                      onPress={() => handleToggleTemplate(template.id)}
+                      disabled={isUpdating === template.id}
+                    >
+                      {isUpdating === template.id ? (
+                        <ActivityIndicator size="small" color={COLORS.primary} />
+                      ) : (
+                        <Ionicons
+                          name={isEnabled ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={24}
+                          color={isEnabled ? COLORS.success : COLORS.gray400}
+                        />
+                      )}
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                  {isEnabled && !isDefault && (
+                    <TouchableOpacity
+                      style={styles.setDefaultButton}
+                      onPress={() => handleSetDefault(template.id)}
+                    >
+                      <Text style={styles.setDefaultText}>Set as Default</Text>
+                    </TouchableOpacity>
+                  )}
+                </Card>
+              );
+            })}
+          </View>
+        )}
+
+        {/* System Templates Section */}
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>System Templates</Text>
+          <Text style={styles.description}>
+            Select which checklist templates your team can use when creating inspections.
         </Text>
 
         {enabledTemplateIds.size === 0 && (
@@ -288,6 +404,7 @@ export default function TemplatesScreen() {
             </Card>
           );
         })}
+        </View>
 
         <View style={{ height: SPACING.xl * 2 }} />
       </ScrollView>
@@ -302,6 +419,38 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: SPACING.md,
+  },
+  createButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  createButtonText: {
+    color: COLORS.white,
+    fontSize: FONT_SIZE.md,
+    fontWeight: FONT_WEIGHT.semibold,
+  },
+  sectionContainer: {
+    marginBottom: SPACING.lg,
+  },
+  sectionTitle: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: FONT_WEIGHT.semibold,
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.sm,
+  },
+  editButton: {
+    padding: SPACING.xs,
+    marginRight: SPACING.xs,
+  },
+  deleteButton: {
+    padding: SPACING.xs,
+    marginRight: SPACING.xs,
   },
   loadingContainer: {
     flex: 1,

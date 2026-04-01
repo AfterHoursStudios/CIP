@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -20,11 +20,12 @@ import * as inspectionService from '../../src/services/inspection.service';
 import * as hcpService from '../../src/services/housecallpro.service';
 import * as pdfService from '../../src/services/pdf.service';
 import * as templateService from '../../src/services/checklist-template.service';
+import * as companyService from '../../src/services/company.service';
 import { Button } from '../../src/components/ui';
 import TemplateSelector from '../../src/components/TemplateSelector';
 import MeasurementInput from '../../src/components/MeasurementInput';
 import { useCompany } from '../../src/contexts';
-import type { Inspection, InspectionItem, ItemStatus, MeasurementValue } from '../../src/types';
+import type { Inspection, InspectionItem, ItemStatus, MeasurementValue, ItemValue, SelectionOption } from '../../src/types';
 import type { ChecklistTemplate } from '../../src/services/checklist-template.service';
 
 const STATUS_OPTIONS: { value: ItemStatus; label: string; color: string; bgColor: string }[] = [
@@ -44,6 +45,7 @@ export default function InspectionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { currentCompany } = useCompany();
+  const scrollViewRef = useRef<ScrollView>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [categories, setCategories] = useState<CategoryGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -60,6 +62,9 @@ export default function InspectionDetailScreen() {
   const [notes, setNotes] = useState('');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
   const [uploadingPhotoItemId, setUploadingPhotoItemId] = useState<string | null>(null);
+  const [ownerName, setOwnerName] = useState<string | null>(null);
+  const [editingNoteItemId, setEditingNoteItemId] = useState<string | null>(null);
+  const [itemNoteText, setItemNoteText] = useState('');
 
   const loadInspection = useCallback(async () => {
     if (!id) return;
@@ -116,6 +121,17 @@ export default function InspectionDetailScreen() {
     }
   }, [currentCompany]);
 
+  // Fetch company owner name
+  useEffect(() => {
+    if (currentCompany) {
+      companyService.getCompanyOwner(currentCompany.id).then(({ data }) => {
+        if (data?.user?.full_name) {
+          setOwnerName(data.user.full_name);
+        }
+      });
+    }
+  }, [currentCompany]);
+
   async function handleRefresh() {
     setIsRefreshing(true);
     await loadInspection();
@@ -165,6 +181,32 @@ export default function InspectionDetailScreen() {
     if (error) {
       if (Platform.OS === 'web') {
         alert('Error updating measurement: ' + error);
+      } else {
+        Alert.alert('Error', error);
+      }
+    } else {
+      // Update local state
+      setCategories((prev) =>
+        prev.map((cat) => ({
+          ...cat,
+          items: cat.items.map((i) =>
+            i.id === item.id ? { ...i, value, status: 'satisfactory' as ItemStatus } : i
+          ),
+        }))
+      );
+    }
+
+    setUpdatingItemId(null);
+  }
+
+  async function handleValueChange(item: InspectionItem, value: ItemValue) {
+    setUpdatingItemId(item.id);
+
+    const { error } = await inspectionService.updateItemValue(item.id, value as any);
+
+    if (error) {
+      if (Platform.OS === 'web') {
+        alert('Error updating value: ' + error);
       } else {
         Alert.alert('Error', error);
       }
@@ -242,6 +284,8 @@ export default function InspectionDetailScreen() {
     } else {
       setShowTemplateSelector(false);
       await loadInspection();
+      // Scroll to top after template is applied
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
     }
 
     setIsApplyingTemplate(false);
@@ -282,7 +326,7 @@ export default function InspectionDetailScreen() {
   }
 
   async function handleSaveInspection(status: 'in_progress' | 'completed') {
-    if (!id) return;
+    if (!id || !inspection || !currentCompany) return;
 
     setIsSaving(true);
 
@@ -294,14 +338,69 @@ export default function InspectionDetailScreen() {
       } else {
         Alert.alert('Error', error);
       }
-    } else {
-      if (Platform.OS === 'web') {
-        alert('Inspection saved successfully!');
-      } else {
-        Alert.alert('Success', 'Inspection saved successfully!');
-      }
-      await loadInspection();
+      setIsSaving(false);
+      return;
     }
+
+    // Generate PDF and send to company owner
+    try {
+      const pdfCategories = categories.map(c => ({
+        category: c.category,
+        items: c.items,
+      }));
+
+      const { data: pdfResult } = await pdfService.generateInspectionPDF(
+        inspection,
+        pdfCategories,
+        currentCompany
+      );
+
+      let pdfBase64: string | undefined;
+      let pdfFileName: string | undefined;
+
+      if (pdfResult?.blob && pdfResult.blob.size > 0) {
+        // Convert blob to base64
+        const reader = new FileReader();
+        pdfBase64 = await new Promise<string>((resolve, reject) => {
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            if (result && result.includes(',')) {
+              const base64 = result.split(',')[1];
+              resolve(base64);
+            } else {
+              resolve('');
+            }
+          };
+          reader.onerror = () => {
+            resolve('');
+          };
+          reader.readAsDataURL(pdfResult.blob);
+        });
+        pdfFileName = pdfResult.fileName;
+      }
+
+      // Send email to company owner
+      await companyService.sendInspectionReportToOwner({
+        companyId: currentCompany.id,
+        companyName: currentCompany.name,
+        inspectorName: inspection.inspector?.full_name || 'Inspector',
+        projectName: inspection.project_name,
+        projectAddress: inspection.project_address || undefined,
+        clientName: inspection.client_name || undefined,
+        completionPercentage: inspection.completion_percentage || 0,
+        pdfBase64,
+        pdfFileName,
+      });
+    } catch (emailError) {
+      // Don't fail the save if email fails
+    }
+
+    if (Platform.OS === 'web') {
+      alert('Inspection saved successfully!');
+    } else {
+      Alert.alert('Success', 'Inspection saved successfully!');
+    }
+    await loadInspection();
 
     setIsSaving(false);
   }
@@ -559,6 +658,40 @@ export default function InspectionDetailScreen() {
     }
   }
 
+  function handleStartEditNote(item: InspectionItem) {
+    setEditingNoteItemId(item.id);
+    setItemNoteText(item.notes || '');
+  }
+
+  async function handleSaveItemNote(itemId: string) {
+    const { error } = await inspectionService.updateItemNotes(itemId, itemNoteText || null);
+
+    if (error) {
+      if (Platform.OS === 'web') {
+        alert('Error saving note: ' + error);
+      } else {
+        Alert.alert('Error', error);
+      }
+      return;
+    }
+
+    // Update local state
+    setCategories(prev => prev.map(cat => ({
+      ...cat,
+      items: cat.items.map(i =>
+        i.id === itemId ? { ...i, notes: itemNoteText || null } : i
+      )
+    })));
+
+    setEditingNoteItemId(null);
+    setItemNoteText('');
+  }
+
+  function handleCancelEditNote() {
+    setEditingNoteItemId(null);
+    setItemNoteText('');
+  }
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -588,6 +721,7 @@ export default function InspectionDetailScreen() {
         }}
       />
       <ScrollView
+        ref={scrollViewRef}
         style={styles.container}
         refreshControl={
           <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
@@ -706,13 +840,164 @@ export default function InspectionDetailScreen() {
                               <MeasurementInput
                                 label={item.name}
                                 description={item.description}
-                                value={item.value}
+                                value={item.value as MeasurementValue}
                                 onChange={(value) => handleMeasurementChange(item, value)}
                                 disabled={updatingItemId === item.id}
                               />
                             </View>
+                          ) : item.item_type === 'number' ? (
+                            /* Number Input */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <TextInput
+                                style={styles.numberInput}
+                                value={item.value != null ? String(item.value) : ''}
+                                onChangeText={(text) => {
+                                  const num = text === '' ? null : parseFloat(text);
+                                  if (text === '' || !isNaN(num as number)) {
+                                    handleValueChange(item, num);
+                                  }
+                                }}
+                                placeholder="Enter number..."
+                                placeholderTextColor={COLORS.textSecondary}
+                                keyboardType="numeric"
+                                editable={updatingItemId !== item.id}
+                              />
+                            </View>
+                          ) : item.item_type === 'yesno' ? (
+                            /* Yes/No Toggle */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <View style={styles.yesnoContainer}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.yesnoButton,
+                                    item.value === true && styles.yesnoButtonYes,
+                                  ]}
+                                  onPress={() => handleValueChange(item, item.value === true ? null : true)}
+                                  disabled={updatingItemId === item.id}
+                                >
+                                  <Text style={[
+                                    styles.yesnoButtonText,
+                                    item.value === true && styles.yesnoButtonTextActive,
+                                  ]}>Yes</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.yesnoButton,
+                                    item.value === false && styles.yesnoButtonNo,
+                                  ]}
+                                  onPress={() => handleValueChange(item, item.value === false ? null : false)}
+                                  disabled={updatingItemId === item.id}
+                                >
+                                  <Text style={[
+                                    styles.yesnoButtonText,
+                                    item.value === false && styles.yesnoButtonTextActive,
+                                  ]}>No</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : item.item_type === 'passfail' ? (
+                            /* Pass/Fail Toggle */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <View style={styles.yesnoContainer}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.yesnoButton,
+                                    item.value === 'pass' && styles.passfailButtonPass,
+                                  ]}
+                                  onPress={() => handleValueChange(item, item.value === 'pass' ? null : 'pass')}
+                                  disabled={updatingItemId === item.id}
+                                >
+                                  <Text style={[
+                                    styles.yesnoButtonText,
+                                    item.value === 'pass' && styles.yesnoButtonTextActive,
+                                  ]}>Pass</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.yesnoButton,
+                                    item.value === 'fail' && styles.passfailButtonFail,
+                                  ]}
+                                  onPress={() => handleValueChange(item, item.value === 'fail' ? null : 'fail')}
+                                  disabled={updatingItemId === item.id}
+                                >
+                                  <Text style={[
+                                    styles.yesnoButtonText,
+                                    item.value === 'fail' && styles.yesnoButtonTextActive,
+                                  ]}>Fail</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : item.item_type === 'text' ? (
+                            /* Text Input */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <TextInput
+                                style={styles.textInputField}
+                                value={typeof item.value === 'string' ? item.value : ''}
+                                onChangeText={(text) => handleValueChange(item, text || null)}
+                                placeholder="Enter text..."
+                                placeholderTextColor={COLORS.textSecondary}
+                                multiline
+                                numberOfLines={2}
+                                editable={updatingItemId !== item.id}
+                              />
+                            </View>
+                          ) : item.item_type === 'selection' ? (
+                            /* Selection Dropdown */
+                            <View style={styles.itemColumn}>
+                              <View style={styles.itemNameContainer}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.description && (
+                                  <Text style={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </View>
+                              <View style={styles.selectionContainer}>
+                                {(item.options || []).map((option: SelectionOption) => {
+                                  const isSelected = item.value === option.value;
+                                  return (
+                                    <TouchableOpacity
+                                      key={option.value}
+                                      style={[
+                                        styles.selectionButton,
+                                        isSelected && styles.selectionButtonActive,
+                                      ]}
+                                      onPress={() => handleValueChange(item, isSelected ? null : option.value)}
+                                      disabled={updatingItemId === item.id}
+                                    >
+                                      <Text style={[
+                                        styles.selectionButtonText,
+                                        isSelected && styles.selectionButtonTextActive,
+                                      ]}>{option.label}</Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </View>
+                            </View>
                           ) : (
-                            /* Status Options - Stacked Layout */
+                            /* Status Options - Stacked Layout (default) */
                             <View style={styles.itemColumn}>
                               <View style={styles.itemNameContainer}>
                                 <Text style={styles.itemName}>{item.name}</Text>
@@ -756,9 +1041,9 @@ export default function InspectionDetailScreen() {
                             </View>
                           )}
 
-                          {/* Photo Section */}
+                          {/* Photo & Note Section */}
                           <View style={styles.photoSection}>
-                            {/* Photo Buttons */}
+                            {/* Action Buttons */}
                             <View style={styles.photoButtons}>
                               <TouchableOpacity
                                 style={styles.photoButton}
@@ -782,7 +1067,63 @@ export default function InspectionDetailScreen() {
                                 <Ionicons name="image-outline" size={16} color={COLORS.primary} />
                                 <Text style={styles.photoButtonText}>Gallery</Text>
                               </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.photoButton, item.notes && styles.photoButtonActive]}
+                                onPress={() => handleStartEditNote(item)}
+                              >
+                                <Ionicons
+                                  name={item.notes ? "document-text" : "document-text-outline"}
+                                  size={16}
+                                  color={item.notes ? COLORS.success : COLORS.primary}
+                                />
+                                <Text style={[styles.photoButtonText, item.notes && { color: COLORS.success }]}>
+                                  {item.notes ? 'Note' : 'Add Note'}
+                                </Text>
+                              </TouchableOpacity>
                             </View>
+
+                            {/* Item Note Input */}
+                            {editingNoteItemId === item.id && (
+                              <View style={styles.itemNoteContainer}>
+                                <TextInput
+                                  style={styles.itemNoteInput}
+                                  value={itemNoteText}
+                                  onChangeText={setItemNoteText}
+                                  placeholder="Add a note for this item..."
+                                  placeholderTextColor={COLORS.textSecondary}
+                                  multiline
+                                  numberOfLines={3}
+                                  autoFocus
+                                />
+                                <View style={styles.itemNoteButtons}>
+                                  <TouchableOpacity
+                                    style={styles.itemNoteCancelButton}
+                                    onPress={handleCancelEditNote}
+                                  >
+                                    <Text style={styles.itemNoteCancelText}>Cancel</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.itemNoteSaveButton}
+                                    onPress={() => handleSaveItemNote(item.id)}
+                                  >
+                                    <Text style={styles.itemNoteSaveText}>Save</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            )}
+
+                            {/* Show saved note preview */}
+                            {item.notes && editingNoteItemId !== item.id && (
+                              <TouchableOpacity
+                                style={styles.itemNotePreview}
+                                onPress={() => handleStartEditNote(item)}
+                              >
+                                <Ionicons name="document-text" size={14} color={COLORS.success} />
+                                <Text style={styles.itemNotePreviewText} numberOfLines={2}>
+                                  {item.notes}
+                                </Text>
+                              </TouchableOpacity>
+                            )}
 
                             {/* Photo Thumbnails */}
                             {item.photos && item.photos.length > 0 && (
@@ -852,7 +1193,7 @@ export default function InspectionDetailScreen() {
         {categories.length > 0 && (
           <View style={styles.saveContainer}>
             <Button
-              title="Save Inspection"
+              title={ownerName ? `Save and Email ${ownerName}` : 'Save Inspection'}
               onPress={() => handleSaveInspection('completed')}
               loading={isSaving}
               fullWidth
@@ -1046,12 +1387,16 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.lg,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
     elevation: 1,
-  },
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 1px 2px rgba(0, 0, 0, 0.05)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.05,
+          shadowRadius: 2,
+        }),
+  } as any,
   categoryHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1132,6 +1477,92 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHT.medium,
     color: COLORS.textSecondary,
   },
+  numberInput: {
+    backgroundColor: COLORS.gray50,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: RADIUS.md,
+    padding: SPACING.sm,
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textPrimary,
+    minWidth: 120,
+  },
+  yesnoContainer: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+  },
+  yesnoButton: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    backgroundColor: COLORS.white,
+    minWidth: 70,
+    alignItems: 'center',
+  },
+  yesnoButtonYes: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#15803d',
+  },
+  yesnoButtonNo: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#dc2626',
+  },
+  passfailButtonPass: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#15803d',
+  },
+  passfailButtonFail: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#dc2626',
+  },
+  yesnoButtonText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: FONT_WEIGHT.medium,
+    color: COLORS.textSecondary,
+  },
+  yesnoButtonTextActive: {
+    color: COLORS.textPrimary,
+  },
+  textInputField: {
+    backgroundColor: COLORS.gray50,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: RADIUS.md,
+    padding: SPACING.sm,
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textPrimary,
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  selectionContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  selectionButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    backgroundColor: COLORS.white,
+    minWidth: 70,
+    alignItems: 'center',
+  },
+  selectionButtonActive: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#2563eb',
+  },
+  selectionButtonText: {
+    fontSize: 10,
+    fontWeight: FONT_WEIGHT.medium,
+    color: COLORS.textSecondary,
+  },
+  selectionButtonTextActive: {
+    color: '#2563eb',
+  },
   photoSection: {
     marginTop: SPACING.sm,
   },
@@ -1152,6 +1583,69 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xs,
     color: COLORS.primary,
     fontWeight: FONT_WEIGHT.medium,
+  },
+  photoButtonActive: {
+    borderColor: COLORS.success,
+    backgroundColor: '#f0fdf4',
+  },
+  itemNoteContainer: {
+    marginTop: SPACING.sm,
+    backgroundColor: COLORS.gray50,
+    borderRadius: RADIUS.sm,
+    padding: SPACING.sm,
+  },
+  itemNoteInput: {
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: RADIUS.sm,
+    padding: SPACING.sm,
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textPrimary,
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  itemNoteButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: SPACING.sm,
+    marginTop: SPACING.sm,
+  },
+  itemNoteCancelButton: {
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+  },
+  itemNoteCancelText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+  },
+  itemNoteSaveButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.sm,
+  },
+  itemNoteSaveText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.white,
+    fontWeight: FONT_WEIGHT.medium,
+  },
+  itemNotePreview: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.xs,
+    marginTop: SPACING.sm,
+    padding: SPACING.sm,
+    backgroundColor: '#f0fdf4',
+    borderRadius: RADIUS.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.success,
+  },
+  itemNotePreviewText: {
+    flex: 1,
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textPrimary,
+    lineHeight: 18,
   },
   photoThumbnails: {
     flexDirection: 'row',
@@ -1210,12 +1704,16 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.lg,
     padding: SPACING.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
     elevation: 1,
-  },
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 1px 2px rgba(0, 0, 0, 0.05)' }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.05,
+          shadowRadius: 2,
+        }),
+  } as any,
   notesHeader: {
     flexDirection: 'row',
     alignItems: 'center',

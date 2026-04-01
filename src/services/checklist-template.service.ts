@@ -1,10 +1,11 @@
 import { supabase } from '../lib/supabase';
-import type { ApiResponse, ItemType } from '../types';
+import type { ApiResponse, ItemType, SelectionOption } from '../types';
 
 export interface ChecklistItem {
   name: string;
   item_type?: ItemType; // defaults to 'status' if not specified
   description?: string;
+  options?: SelectionOption[]; // For 'selection' type only
 }
 
 export interface ChecklistCategory {
@@ -176,7 +177,7 @@ export async function setDefaultTemplate(
 
 // Helper to flatten template categories into items array
 export function flattenTemplateCategories(categories: ChecklistCategory[]) {
-  const items: { category: string; name: string; item_type?: ItemType; description?: string }[] = [];
+  const items: { category: string; name: string; item_type?: ItemType; description?: string; options?: SelectionOption[] }[] = [];
 
   categories.forEach((category) => {
     category.items.forEach((item) => {
@@ -192,10 +193,142 @@ export function flattenTemplateCategories(categories: ChecklistCategory[]) {
           name: item.name,
           item_type: item.item_type || 'status',
           description: item.description,
+          options: item.options,
         });
       }
     });
   });
 
   return items;
+}
+
+// Get custom templates created by a company
+export async function getCompanyCustomTemplates(companyId: string): Promise<ApiResponse<ChecklistTemplate[]>> {
+  const { data, error } = await supabase
+    .from('checklist_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_system', false)
+    .order('name');
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return { data, error: null };
+}
+
+// Create a custom template for a company
+export async function createCustomTemplate(
+  companyId: string,
+  template: {
+    name: string;
+    description?: string;
+    industry?: string;
+    categories: ChecklistCategory[];
+  }
+): Promise<ApiResponse<ChecklistTemplate>> {
+  const { data, error } = await supabase
+    .from('checklist_templates')
+    .insert({
+      name: template.name,
+      description: template.description || null,
+      industry: template.industry || 'custom',
+      categories: template.categories,
+      is_system: false,
+      company_id: companyId,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  // Auto-enable the template for the company
+  await enableTemplate(companyId, data.id, false);
+
+  return { data, error: null };
+}
+
+// Update a custom template
+export async function updateCustomTemplate(
+  templateId: string,
+  companyId: string,
+  updates: {
+    name?: string;
+    description?: string;
+    industry?: string;
+    categories?: ChecklistCategory[];
+  }
+): Promise<ApiResponse<ChecklistTemplate>> {
+  const { data, error } = await supabase
+    .from('checklist_templates')
+    .update({
+      ...updates,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', templateId)
+    .eq('company_id', companyId) // Ensure company owns this template
+    .eq('is_system', false) // Can't edit system templates
+    .select()
+    .single();
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return { data, error: null };
+}
+
+// Delete a custom template
+export async function deleteCustomTemplate(
+  templateId: string,
+  companyId: string
+): Promise<ApiResponse<null>> {
+  // First remove from company_checklist_templates
+  await supabase
+    .from('company_checklist_templates')
+    .delete()
+    .eq('template_id', templateId);
+
+  // Then delete the template itself
+  const { error } = await supabase
+    .from('checklist_templates')
+    .delete()
+    .eq('id', templateId)
+    .eq('company_id', companyId) // Ensure company owns this template
+    .eq('is_system', false); // Can't delete system templates
+
+  if (error) {
+    return { data: null, error: error.message };
+  }
+
+  return { data: null, error: null };
+}
+
+// Clone a template (system or custom) to create a new custom template
+export async function cloneTemplate(
+  templateId: string,
+  companyId: string,
+  newName: string
+): Promise<ApiResponse<ChecklistTemplate>> {
+  // Get the source template
+  const { data: sourceTemplate, error: fetchError } = await supabase
+    .from('checklist_templates')
+    .select('*')
+    .eq('id', templateId)
+    .single();
+
+  if (fetchError || !sourceTemplate) {
+    return { data: null, error: fetchError?.message || 'Template not found' };
+  }
+
+  // Create a copy
+  return createCustomTemplate(companyId, {
+    name: newName,
+    description: sourceTemplate.description,
+    industry: sourceTemplate.industry,
+    categories: sourceTemplate.categories,
+  });
 }

@@ -206,19 +206,110 @@ export async function testConnection(companyId: string): Promise<ApiResponse<boo
   return { data: true, error: null };
 }
 
-// Get Scheduled Jobs
+// Get scheduled jobs from 7 days ago onwards (up to 200 jobs)
 export async function getScheduledJobs(
   companyId: string,
   page: number = 1,
-  pageSize: number = 50
+  pageSize: number = 200
 ): Promise<ApiResponse<HCPJobsResponse>> {
-  const result = await hcpFetch<HCPJobsResponse>(companyId, `/jobs`);
+  const params = new URLSearchParams();
+  params.append('page', page.toString());
+  params.append('page_size', pageSize.toString());
+
+  // Start from 7 days ago, no end date limit
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  params.append('work_status', 'scheduled');
+  params.append('scheduled_start_min', sevenDaysAgo.toISOString());
+
+  const result = await hcpFetch<HCPJobsResponse>(companyId, `/jobs?${params}`);
 
   if (result.error) {
     console.error('HCP Jobs Error:', result.error);
   }
 
   return result;
+}
+
+// Get jobs within date range: 7 days ago to 7 days ahead
+// Fetches all pages, API handles date filtering
+export async function getAllScheduledJobs(
+  companyId: string,
+  onProgress?: (fetched: number, total: number) => void
+): Promise<ApiResponse<HCPJob[]>> {
+  const matchingJobs: HCPJob[] = [];
+  let currentPage = 1;
+  const pageSize = 200;
+  const maxPages = 50;
+
+  // Date range: 7 days ago to 7 days ahead
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const sevenDaysAhead = new Date();
+  sevenDaysAhead.setDate(sevenDaysAhead.getDate() + 7);
+  sevenDaysAhead.setHours(23, 59, 59, 999);
+
+  console.log(`HCP: Fetching jobs from ${sevenDaysAgo.toISOString()} to ${sevenDaysAhead.toISOString()}`);
+
+  while (currentPage <= maxPages) {
+    const params = new URLSearchParams();
+    params.append('page', currentPage.toString());
+    params.append('page_size', pageSize.toString());
+    // API handles date filtering
+    params.append('scheduled_start_min', sevenDaysAgo.toISOString());
+    params.append('scheduled_start_max', sevenDaysAhead.toISOString());
+
+    const result = await hcpFetch<HCPJobsResponse>(companyId, `/jobs?${params}`);
+
+    if (result.error) {
+      console.error('HCP Jobs Error on page', currentPage, ':', result.error);
+      if (matchingJobs.length > 0) break;
+      return { data: null, error: result.error };
+    }
+
+    if (!result.data) break;
+
+    const jobs = result.data.jobs || [];
+    if (jobs.length === 0) break;
+
+    // Only filter out completed/canceled jobs - trust API for date filtering
+    let skippedCompleted = 0;
+
+    for (const job of jobs) {
+      const status = (job.work_status || '').toLowerCase();
+      const isCompleted = status === 'complete' || status === 'canceled' ||
+                          status === 'cancelled' || status.includes('complete');
+
+      if (isCompleted) {
+        skippedCompleted++;
+        continue;
+      }
+
+      // Include all non-completed jobs from the API response
+      matchingJobs.push(job);
+
+      // Log job details for debugging
+      console.log(`HCP: Job #${job.invoice_number || job.id} - status: ${job.work_status}, date: ${job.schedule?.scheduled_start || 'none'}`);
+    }
+
+    console.log(`HCP: Page ${currentPage}: ${jobs.length} jobs from API, ${skippedCompleted} completed/canceled, ${jobs.length - skippedCompleted} active`);
+
+    if (onProgress) {
+      onProgress(matchingJobs.length, result.data.total_items || 0);
+    }
+
+    // Stop if we've checked all pages
+    if (currentPage >= (result.data.total_pages || 1)) break;
+
+    currentPage++;
+  }
+
+  console.log(`HCP: Done. Found ${matchingJobs.length} active jobs in date range.`);
+
+  return { data: matchingJobs, error: null };
 }
 
 // Get All Jobs (with filters)
@@ -256,33 +347,24 @@ export async function uploadJobAttachment(
   fileName: string,
   mimeType: string = 'application/pdf'
 ): Promise<ApiResponse<{ id: string }>> {
-  console.log('uploadJobAttachment called:', { companyId, jobId, fileName, mimeType });
-
   const apiKey = await getApiKey(companyId);
-  console.log('API key retrieved:', apiKey ? 'yes' : 'no');
 
   if (!apiKey) {
     return { data: null, error: 'Housecall Pro API key not configured' };
   }
 
   try {
-    console.log('Platform:', Platform.OS);
-
     if (Platform.OS === 'web') {
       // Web: Fetch file URI as blob
-      console.log('Fetching blob from URI...');
       const fileResponse = await fetch(fileUri);
       const blob = await fileResponse.blob();
-      console.log('Blob fetched, size:', blob.size);
 
       // Create fresh FormData for the request
       const formData = new FormData();
       formData.append('file', blob, fileName);
-      console.log('FormData created');
 
       // Use proxy on web to avoid CORS issues
       const proxyUrl = `${HCP_PROXY_URL}?endpoint=${encodeURIComponent(`/jobs/${jobId}/attachments`)}`;
-      console.log('Uploading to proxy URL:', proxyUrl);
 
       const response = await fetch(proxyUrl, {
         method: 'POST',
@@ -291,11 +373,9 @@ export async function uploadJobAttachment(
         },
         body: formData,
       });
-      console.log('Fetch completed, status:', response.status);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('HCP attachment upload failed:', response.status, errorText);
         let errorData: any = {};
         try {
           errorData = JSON.parse(errorText);
@@ -309,7 +389,6 @@ export async function uploadJobAttachment(
       }
 
       const data = await response.json();
-      console.log('HCP attachment upload succeeded:', data);
       return { data, error: null };
     } else {
       // Native: Use file URI directly with FormData
@@ -320,8 +399,6 @@ export async function uploadJobAttachment(
         type: mimeType,
       } as any);
 
-      console.log('Uploading attachment to HCP:', `/jobs/${jobId}/attachments`);
-
       const response = await fetch(`${HCP_API_BASE}/jobs/${jobId}/attachments`, {
         method: 'POST',
         headers: {
@@ -329,11 +406,9 @@ export async function uploadJobAttachment(
         },
         body: formData,
       });
-      console.log('Fetch completed, status:', response.status);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        console.error('HCP attachment upload failed:', response.status, errorData);
         return {
           data: null,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -341,11 +416,9 @@ export async function uploadJobAttachment(
       }
 
       const data = await response.json();
-      console.log('HCP attachment upload succeeded:', data);
       return { data, error: null };
     }
   } catch (error) {
-    console.error('HCP attachment upload error:', error);
     return { data: null, error: (error as Error).message };
   }
 }

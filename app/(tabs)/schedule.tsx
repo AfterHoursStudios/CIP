@@ -17,6 +17,7 @@ import { useAuth, useCompany } from '../../src/contexts';
 import { Card, Button, Input } from '../../src/components/ui';
 import { COLORS, SPACING, FONT_SIZE, FONT_WEIGHT, RADIUS } from '../../src/lib/constants';
 import * as hcpService from '../../src/services/housecallpro.service';
+import * as jobberService from '../../src/services/jobber.service';
 import * as inspectionService from '../../src/services/inspection.service';
 import { isSubscriptionActive, PLAN_DETAILS } from '../../src/services/subscription.service';
 import type { Inspection } from '../../src/types';
@@ -35,10 +36,13 @@ export default function ScheduleScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isHcpConnected, setIsHcpConnected] = useState(false);
+  const [isJobberConnected, setIsJobberConnected] = useState(false);
   const [allInspections, setAllInspections] = useState<Inspection[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [syncStatus, setSyncStatus] = useState<string>('');
   const [lastSyncJobCount, setLastSyncJobCount] = useState<number>(0);
+  const [lastJobberSyncTime, setLastJobberSyncTime] = useState<number>(0);
+  const [jobberRateLimited, setJobberRateLimited] = useState(false);
 
   // Generate array of dates for the date picker (7 days centered on selected)
   const dateOptions = useMemo(() => {
@@ -93,15 +97,28 @@ export default function ScheduleScreen() {
       return;
     }
 
-    // Check HCP connection
-    const connected = await hcpService.isConnected(currentCompany.id);
-    setIsHcpConnected(connected);
+    // Check both HCP and Jobber connections in parallel
+    const [hcpConnected, jobberConnected] = await Promise.all([
+      hcpService.isConnected(currentCompany.id),
+      jobberService.isConnected(currentCompany.id),
+    ]);
+    setIsHcpConnected(hcpConnected);
+    setIsJobberConnected(jobberConnected);
 
-    // If connected, sync jobs from HCP
-    if (connected && showSyncStatus) {
+    // If connected, sync jobs from HCP and/or Jobber
+    if (showSyncStatus && (hcpConnected || jobberConnected)) {
       setIsSyncing(true);
-      setSyncStatus('Fetching jobs from Housecall Pro...');
-      await syncHcpJobs();
+
+      if (hcpConnected) {
+        setSyncStatus('Fetching jobs from Housecall Pro...');
+        await syncHcpJobs();
+      }
+
+      if (jobberConnected) {
+        setSyncStatus('Fetching jobs from Jobber...');
+        await syncJobberJobs();
+      }
+
       setIsSyncing(false);
       setSyncStatus('');
     }
@@ -261,6 +278,150 @@ export default function ScheduleScreen() {
     }
 
     console.log(`HCP sync complete: ${importedCount} imported, ${updatedCount} updated, ${skippedCompleted} completed, ${skippedNoDate} no date`);
+  }
+
+  async function syncJobberJobs(isManualSync = false) {
+    if (!currentCompany || !user) return;
+
+    // Skip auto-sync if rate limited (wait 5 minutes)
+    const fiveMinutes = 5 * 60 * 1000;
+    const timeSinceLastSync = Date.now() - lastJobberSyncTime;
+
+    if (!isManualSync && jobberRateLimited && timeSinceLastSync < fiveMinutes) {
+      console.log('Jobber: Skipping auto-sync due to recent rate limiting');
+      return;
+    }
+
+    // Use getAllScheduledJobs to fetch all pages with progress updates
+    const { data: jobs, error } = await jobberService.getAllScheduledJobs(
+      currentCompany.id,
+      (fetched, total) => {
+        setSyncStatus(`Fetching jobs from Jobber... (${fetched}/${total})`);
+      }
+    );
+
+    if (error) {
+      console.error('Jobber sync error:', error);
+      // Track rate limiting
+      if (error.toLowerCase().includes('throttle')) {
+        setJobberRateLimited(true);
+        setLastJobberSyncTime(Date.now());
+      }
+      return;
+    }
+
+    // Successful sync - reset rate limit flag
+    setJobberRateLimited(false);
+    setLastJobberSyncTime(Date.now());
+
+    if (!jobs || !Array.isArray(jobs) || jobs.length === 0) {
+      console.log('Jobber sync: No jobs returned from API');
+      return;
+    }
+
+    console.log(`Jobber sync: Processing ${jobs.length} jobs from API`);
+
+    let importedCount = 0;
+    let updatedCount = 0;
+    let skippedCompleted = 0;
+
+    for (const job of jobs) {
+      // Get job number
+      const jobNumber = String(job.jobNumber);
+
+      // Check if already imported
+      const { data: existing, error: lookupError } = await inspectionService.getInspectionByJobberJobId(
+        job.id,
+        jobNumber,
+        currentCompany.id
+      );
+
+      if (lookupError) {
+        console.error(`Jobber sync: Lookup error for job ${job.id}:`, lookupError);
+      }
+
+      // Check job status
+      const status = (job.jobStatus || '').toLowerCase();
+      const isCompleted = status === 'completed' || status === 'archived' || status === 'cancelled';
+
+      // If job is completed or cancelled in Jobber, mark local inspection as completed
+      if (isCompleted) {
+        skippedCompleted++;
+        if (existing && !existing.completed_date) {
+          setSyncStatus(`Marking job #${jobNumber} as completed...`);
+          await inspectionService.updateInspection(existing.id, {
+            completed_date: new Date().toISOString(),
+          });
+        }
+        continue;
+      }
+
+      // Build address string
+      const fullAddress = jobberService.formatJobberAddress(job.property?.address || null);
+
+      // Build client name
+      const clientName = jobberService.getJobberClientName(job.client);
+
+      // Get client email
+      const clientEmail = job.client?.emails?.[0]?.address || null;
+
+      // Build assigned employee name
+      const assignedEmployee = jobberService.getJobberAssignedEmployees(job);
+
+      // Get visit date
+      const visitDate = jobberService.getJobberVisitDate(job);
+
+      if (existing) {
+        // Update existing inspection with latest data
+        setSyncStatus(`Updating job #${jobNumber}...`);
+        const updateResult = await inspectionService.updateInspection(existing.id, {
+          project_name: job.title || job.instructions || `Job #${jobNumber}`,
+          project_address: fullAddress || null,
+          client_name: clientName || null,
+          client_email: clientEmail || null,
+          scheduled_date: visitDate || null,
+          jobber_job_id: job.id,
+          jobber_job_number: jobNumber,
+          jobber_assigned_employee: assignedEmployee,
+          completed_date: null, // Clear completed_date if job is active again
+        });
+        if (updateResult.error) {
+          console.error(`Jobber sync: Failed to update job #${jobNumber}:`, updateResult.error);
+        } else {
+          updatedCount++;
+        }
+        continue;
+      }
+
+      setSyncStatus(`Importing job #${jobNumber}...`);
+      console.log(`Jobber sync: Creating inspection for job #${jobNumber} (Jobber ID: ${job.id}), scheduled: ${visitDate || 'none'}`);
+
+      // Create inspection
+      const { data: inspection, error: createError } = await inspectionService.createInspection(
+        currentCompany.id,
+        user.id,
+        {
+          project_name: job.title || job.instructions || `Job #${jobNumber}`,
+          project_address: fullAddress || undefined,
+          client_name: clientName || undefined,
+          client_email: clientEmail || undefined,
+          scheduled_date: visitDate || undefined,
+          jobber_job_id: job.id,
+          jobber_job_number: jobNumber,
+          jobber_assigned_employee: assignedEmployee || undefined,
+        }
+      );
+
+      if (createError || !inspection) {
+        console.error(`Jobber sync: Failed to create inspection for job #${jobNumber}:`, createError);
+        continue;
+      }
+
+      console.log(`Jobber sync: Created inspection ${inspection.id} for job #${jobNumber}`);
+      importedCount++;
+    }
+
+    console.log(`Jobber sync complete: ${importedCount} imported, ${updatedCount} updated, ${skippedCompleted} completed`);
   }
 
   async function loadInspections() {
@@ -449,8 +610,17 @@ export default function ScheduleScreen() {
 
   async function handleManualSync() {
     setIsSyncing(true);
-    setSyncStatus('Syncing with Housecall Pro...');
-    await syncHcpJobs();
+
+    if (isHcpConnected) {
+      setSyncStatus('Syncing with Housecall Pro...');
+      await syncHcpJobs();
+    }
+
+    if (isJobberConnected) {
+      setSyncStatus('Syncing with Jobber...');
+      await syncJobberJobs(true); // Manual sync - bypass cooldown
+    }
+
     await loadInspections();
     setIsSyncing(false);
     setSyncStatus('');
@@ -617,8 +787,8 @@ export default function ScheduleScreen() {
           />
         }
       >
-        {/* HCP Sync Status */}
-        {isHcpConnected && (
+        {/* Sync Status Banner - Shows when connected to HCP and/or Jobber */}
+        {(isHcpConnected || isJobberConnected) && (
           <TouchableOpacity
             style={styles.syncBanner}
             onPress={handleManualSync}
@@ -627,7 +797,13 @@ export default function ScheduleScreen() {
             <View style={styles.syncBannerContent}>
               <Ionicons name="sync" size={18} color={COLORS.white} />
               <Text style={styles.syncBannerText}>
-                {isSyncing ? syncStatus || 'Syncing...' : 'Connected to Housecall Pro'}
+                {isSyncing
+                  ? syncStatus || 'Syncing...'
+                  : `Connected to ${[
+                      isHcpConnected ? 'Housecall Pro' : '',
+                      isJobberConnected ? 'Jobber' : '',
+                    ].filter(Boolean).join(' & ')}`
+                }
               </Text>
             </View>
             {!isSyncing && (
@@ -639,7 +815,7 @@ export default function ScheduleScreen() {
           </TouchableOpacity>
         )}
 
-        {!isHcpConnected && (
+        {!isHcpConnected && !isJobberConnected && (
           <TouchableOpacity
             style={styles.connectBanner}
             onPress={() => router.push('/settings/integrations')}
@@ -653,10 +829,10 @@ export default function ScheduleScreen() {
         )}
 
         {/* Jobs Summary Header */}
-        {isHcpConnected && lastSyncJobCount > 0 && (
+        {(isHcpConnected || isJobberConnected) && lastSyncJobCount > 0 && (
           <View style={styles.jobsSummaryHeader}>
             <Text style={styles.jobsSummaryText}>
-              {lastSyncJobCount} job{lastSyncJobCount !== 1 ? 's' : ''} pulled from Housecall Pro
+              {lastSyncJobCount} job{lastSyncJobCount !== 1 ? 's' : ''} synced
             </Text>
             <Text style={styles.jobsSummarySubtext}>
               {allInspections.length} active job{allInspections.length !== 1 ? 's' : ''} in schedule
@@ -752,7 +928,7 @@ export default function ScheduleScreen() {
                         </Text>
                       </View>
                     )}
-                    {inspection.hcp_assigned_employee && (
+                    {(inspection.hcp_assigned_employee || inspection.jobber_assigned_employee) && (
                       <View style={styles.employeeRow}>
                         <Ionicons
                           name="person-outline"
@@ -763,7 +939,7 @@ export default function ScheduleScreen() {
                           styles.employeeName,
                           !hasActiveSubscription && styles.textDisabled,
                         ]}>
-                          {inspection.hcp_assigned_employee}
+                          {inspection.hcp_assigned_employee || inspection.jobber_assigned_employee}
                         </Text>
                       </View>
                     )}
