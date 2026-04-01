@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseUrl } from '../lib/supabase';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
@@ -7,12 +7,29 @@ import type { User, ApiResponse } from '../types';
 // Required for web browser auth session
 WebBrowser.maybeCompleteAuthSession();
 
+// Helper to get the correct redirect URL for the current platform
+function getRedirectUrl(path: string): string {
+  if (Platform.OS === 'web') {
+    // On web, use the current origin
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://cipro.vercel.app';
+    return `${origin}/${path}`;
+  }
+  // On native, use expo's makeRedirectUri
+  return makeRedirectUri({
+    scheme: 'inspectionpro',
+    path,
+  });
+}
+
 export async function signUp(
   email: string,
   password: string,
   fullName: string
 ): Promise<ApiResponse<User>> {
   try {
+    console.log('SignUp: Starting signup for', email);
+    console.log('SignUp: Supabase URL configured:', !!supabaseUrl);
+
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
@@ -21,7 +38,15 @@ export async function signUp(
       },
     });
 
+    console.log('SignUp: Response received', {
+      hasData: !!authData,
+      hasUser: !!authData?.user,
+      hasSession: !!authData?.session,
+      error: authError ? { message: authError.message, status: authError.status, code: authError.code } : null
+    });
+
     if (authError) {
+      console.error('SignUp: Auth error', authError);
       return { data: null, error: authError.message };
     }
 
@@ -34,9 +59,17 @@ export async function signUp(
       id: authData.user.id,
       email: authData.user.email,
       full_name: fullName,
-    }).then(({ error }) => {
-      if (error) console.log('Profile creation note:', error.message);
-    });
+    }).then(() => {});
+
+    // Process any pending invitations for this email
+    try {
+      await supabase.rpc('process_pending_invitations', {
+        p_user_id: authData.user.id,
+      });
+    } catch (e) {
+      // Ignore errors - invitations will be processed on next login
+      console.log('Error processing pending invitations:', e);
+    }
 
     return {
       data: {
@@ -58,41 +91,60 @@ export async function signIn(
   email: string,
   password: string
 ): Promise<ApiResponse<User>> {
-  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
+  try {
+    console.log('Calling Supabase signInWithPassword...', { supabaseUrl });
 
-  if (authError) {
-    return { data: null, error: authError.message };
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    console.log('Supabase response:', { authData: !!authData, authError });
+
+    if (authError) {
+      console.error('Auth error:', authError);
+      return { data: null, error: authError.message };
+    }
+
+    if (!authData.user) {
+      return { data: null, error: 'Failed to sign in' };
+    }
+
+    // Get user profile
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', authData.user.id)
+      .single();
+
+    // Process any pending invitations for this user
+    try {
+      await supabase.rpc('process_pending_invitations', {
+        p_user_id: authData.user.id,
+      });
+    } catch (e) {
+      console.log('Error processing pending invitations:', e);
+    }
+
+    if (profileError || !profile) {
+      return {
+        data: {
+          id: authData.user.id,
+          email: authData.user.email!,
+          full_name: authData.user.user_metadata?.full_name || null,
+          avatar_url: null,
+          created_at: authData.user.created_at,
+          updated_at: authData.user.updated_at || authData.user.created_at,
+        },
+        error: null,
+      };
+    }
+
+    return { data: profile, error: null };
+  } catch (error) {
+    console.error('Sign in error:', error);
+    return { data: null, error: (error as Error).message || 'Network error. Please try again.' };
   }
-
-  if (!authData.user) {
-    return { data: null, error: 'Failed to sign in' };
-  }
-
-  // Get user profile
-  const { data: profile, error: profileError } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', authData.user.id)
-    .single();
-
-  if (profileError || !profile) {
-    return {
-      data: {
-        id: authData.user.id,
-        email: authData.user.email!,
-        full_name: authData.user.user_metadata?.full_name || null,
-        avatar_url: null,
-        created_at: authData.user.created_at,
-        updated_at: authData.user.updated_at || authData.user.created_at,
-      },
-      error: null,
-    };
-  }
-
-  return { data: profile, error: null };
 }
 
 export async function signOut(): Promise<ApiResponse<null>> {
@@ -104,10 +156,7 @@ export async function signOut(): Promise<ApiResponse<null>> {
 }
 
 export async function resetPassword(email: string): Promise<ApiResponse<null>> {
-  const redirectUrl = makeRedirectUri({
-    scheme: 'inspectionpro',
-    path: 'auth/reset-password',
-  });
+  const redirectUrl = getRedirectUrl('auth/reset-password');
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: redirectUrl,
@@ -120,12 +169,8 @@ export async function resetPassword(email: string): Promise<ApiResponse<null>> {
 }
 
 export async function getCurrentUser(): Promise<ApiResponse<User>> {
-  console.log('getCurrentUser: starting...');
-
   try {
-    console.log('getCurrentUser: calling supabase.auth.getUser()...');
     const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
-    console.log('getCurrentUser: getUser complete', { hasUser: !!authUser, error: authError?.message });
 
     if (authError || !authUser) {
       return { data: null, error: authError?.message || 'Not authenticated' };
@@ -176,18 +221,18 @@ export async function getCurrentUser(): Promise<ApiResponse<User>> {
     userProfile = profile;
   }
 
-  // Process any pending invitations on every login (non-blocking)
-  supabase.rpc('process_pending_invitations', {
-    p_user_id: authUser.id,
-    p_email: authUser.email,
-  }).then(({ data, error }) => {
-    if (error) console.log('Invitation processing error:', error.message);
-    else console.log('Invitations processed:', data);
-  });
+  // Process any pending invitations on every login (must complete before returning)
+  try {
+    await supabase.rpc('process_pending_invitations', {
+      p_user_id: authUser.id,
+    });
+  } catch (e) {
+    // Ignore errors - invitations will be processed on next login
+    console.log('Error processing pending invitations:', e);
+  }
 
     return { data: userProfile, error: null };
   } catch (error) {
-    console.log('getCurrentUser: unexpected error', error);
     return { data: null, error: (error as Error).message };
   }
 }
@@ -212,10 +257,7 @@ export async function updateProfile(
 
 export async function signInWithGoogle(): Promise<ApiResponse<User>> {
   try {
-    const redirectUrl = makeRedirectUri({
-      scheme: 'inspectionpro',
-      path: 'auth/callback',
-    });
+    const redirectUrl = getRedirectUrl('auth/callback');
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -250,10 +292,6 @@ export async function signInWithGoogle(): Promise<ApiResponse<User>> {
         const accessToken = hashParams.get('access_token') || url.searchParams.get('access_token');
         const refreshToken = hashParams.get('refresh_token') || url.searchParams.get('refresh_token');
 
-        console.log('OAuth callback URL:', result.url);
-        console.log('Access token found:', !!accessToken);
-        console.log('Refresh token found:', !!refreshToken);
-
         if (accessToken && refreshToken) {
           const { data: sessionData, error: sessionError } =
             await supabase.auth.setSession({
@@ -282,10 +320,7 @@ export async function signInWithGoogle(): Promise<ApiResponse<User>> {
 
 export async function signInWithApple(): Promise<ApiResponse<User>> {
   try {
-    const redirectUrl = makeRedirectUri({
-      scheme: 'inspectionpro',
-      path: 'auth/callback',
-    });
+    const redirectUrl = getRedirectUrl('auth/callback');
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'apple',
